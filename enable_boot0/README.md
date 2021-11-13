@@ -8,6 +8,9 @@ As a result the upload via UART can be only done once for an empty device.
 ### Solution:
 Upload and execute this code: It will enable the BOOT0 pin behavior, so that
 a high level on BOOT0 pin during reset will force the bootloader to execute.
+
+The hex file has been generated for the STM32G031, but there are no special dependencies,
+so I assume that this HEX file will work for any STM32G0 controller.
     
 ### Instructions for UART uploads
 This sequence needs to be executed once for a new / empty STM32G0 device:
