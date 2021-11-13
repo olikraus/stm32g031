@@ -2,9 +2,6 @@
   
   enable_boot0.c
   
-  
-  BSD 3-Clause License
-
   Copyright (c) 2021, olikraus@gmail.com
   All rights reserved.
 
