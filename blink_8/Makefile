@@ -92,7 +92,7 @@ SIZE:=$(GCCBINPATH)arm-none-eabi-size
 
 # Common flags
 COMMON_FLAGS = -mthumb -mcpu=$(MCPU)
-COMMON_FLAGS += -DSTM32L072xx
+COMMON_FLAGS += -DSTM32G031xx
 COMMON_FLAGS += -Wall -I. -I$(SYSINC) -I$(COMMONINC) 
 # define stack size (defaults to 0x0100)  
 # COMMON_FLAGS += -D__STACK_SIZE=0x0100
@@ -127,7 +127,7 @@ all: $(DISNAME) $(HEXNAME)
 .PHONY: upload
 # stm32flash v0.5 does not support STM32L011, so use the latest snapshot 
 upload: $(DISNAME) $(HEXNAME) $(ELFNAME)
-	~/git/stm32flash-code/stm32flash -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
+	/data/kraus/git/stm32flash-code/stm32flash -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
 	$(SIZE) $(ELFNAME)
 
 .PHONY: clean
