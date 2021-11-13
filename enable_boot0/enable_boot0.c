@@ -10,9 +10,10 @@
     As a result the upload via UART can be only done once for an empty device.
     
   Solution:
-    Upload and execute this code: It will enable the BOOT0 pin behavior, so that
-    a high level on BOOT0 pin during reset will force the bootloader to execute.
-    
+    Upload and execute this code as first and initial flash operation: 
+    It will enable the BOOT0 pin behavior, so that a high level on BOOT0 pin 
+    during reset will force the bootloader to execute.
+
   Instructions for UART uploads:
   1. Generate hex file from this code
   2. Upload and execute the generated hex file via UART (stm32flash -g 0)
