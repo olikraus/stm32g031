@@ -3,10 +3,11 @@
   enable_boot0.c
   
   Background:
-    The BOOT0 pin is disabled for STM32G0 devices by default (The bootloader
-    will not be executed with a high level applied to BOOT0 pin).
-    This means: The bootloader is not executed any more after first successful upload.
-    For example the upload via UART can be only done once for an empty device.
+    The BOOT0 pin is disabled for STM32G0 devices by default: The bootloader
+    will not be executed with a high level applied to BOOT0 pin during reset.
+    This means: The bootloader is not executed any more after first successful 
+    upload of any code.
+    As a result the upload via UART can be only done once for an empty device.
     
   Solution:
     Upload and execute this code: It will enable the BOOT0 pin behavior, so that
