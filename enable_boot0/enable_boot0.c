@@ -20,6 +20,9 @@
   3. Wait for 1 second: The BOOT0 pin is now activated
   4. Upload your own code
   
+  Reference:
+  https://community.st.com/s/question/0D50X0000ARQLq2/has-anyone-gotten-the-boot0-pin-to-work-on-an-stm32g071-solved
+    
 */
 
 #include "stm32g0xx.h"
