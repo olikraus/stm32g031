@@ -14,4 +14,4 @@ This sequence needs to be executed once for a new / empty STM32G0 device:
   1. Generate hex file from this code
   2. Upload and execute the generated hex file via UART (stm32flash -g 0)
   3. Wait for 1 second: The BOOT0 pin is now activated
-  4. Upload your own code / user UART upload as usual
+  4. Upload your own code / Use UART upload as usual
