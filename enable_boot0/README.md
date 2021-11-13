@@ -6,7 +6,8 @@ This means: The bootloader is not executed any more after first successful uploa
 As a result the upload via UART can be only done once for an empty device.
     
 ### Solution:
-Upload and execute this code: It will enable the BOOT0 pin behavior, so that
+Upload and execute this code as first and initial flash operation: 
+It will enable the BOOT0 pin behavior, so that
 a high level on BOOT0 pin during reset will force the bootloader to execute.
 
 The hex file has been generated for the STM32G031, but there are no special dependencies,
