@@ -32,6 +32,7 @@
 
 
   Default clock is HSI16 (16 MHz)
+  Blink with busy delay.
     
   Ensure that -DUSER_VECT_TAB_ADDRESS is set during compilation, otherwise
   interrupts will not work after the "go" commant of the flashware USART upload.
@@ -45,21 +46,20 @@
 */
 
 #include "stm32g0xx.h"
+#include "delay.h"
 
 volatile unsigned long SysTickCount = 0;
 
 void __attribute__ ((interrupt, used)) SysTick_Handler(void)
 {
   SysTickCount++;  
-  
-  if ( SysTickCount & 1 )
-    GPIOA->BSRR = GPIO_BSRR_BS3;		/* atomic set PA13 */
-  else
-    GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA13 */
 }
 
 int main()
 {
+  
+  SystemCoreClockUpdate();      /* Assign correct value to SystemCoreClock variable */
+  
   RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
   __NOP();
   __NOP();
@@ -75,10 +75,15 @@ int main()
   GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
   
 
-  SysTick->LOAD = 16000*500 - 1;        // Blink with 1 Hz 
+  SysTick->LOAD = 16000*500 - 1;        /* 2 Hz calls (systick must be active for the delay procedures ) */
   SysTick->VAL = 0;
   SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
     
-  for(;;)
-    ;
+  for(;;)       // blink with 1 Hz
+  {
+    delay_micro_seconds(1000000/2);
+    GPIOA->BSRR = GPIO_BSRR_BS3;		/* atomic set PA3 */
+    delay_micro_seconds(1000000/2);
+    GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
+  }
 }

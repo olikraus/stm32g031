@@ -40,7 +40,7 @@
   
 */
 
-#include "stm32l0xx.h"
+#include "stm32g0xx.h"
 
 /* Generic ARM delay procedure, based on the system timer (SysTick) */
 
