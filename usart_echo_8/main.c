@@ -1,6 +1,26 @@
 /* 
 
-  USART Test for the STM32G031
+  USART echo test for the STM32L072  Project
+
+  Configuration is 115200 8-N-1. Only "\n" is sent. Receiving terminal should add \r
+  (e.g. use add CR function in "minicom")
+  
+
+  Linux:
+    stty -F /dev/ttyUSB0 sane 115200 && cat /dev/ttyUSB0
+    or stty -F /dev/ttyUSB0 sane 115200 igncr  && cat /dev/ttyUSB0
+    screen /dev/ttyUSB0  115200 (terminate with "C-a k" or "C-a \")
+    minicom -D /dev/ttyUSB0  -b 115200 (terminate with "C-a x", change CR mode: "C-a u", disable HW control flow!)
+    
+
+  Ensure that -DUSER_VECT_TAB_ADDRESS is set during compilation, otherwise
+  interrupts will not work after the "go" commant of the flashware USART upload.
+  
+  Problem is, that SCB->VTOR doesn't point to FLASH_BASE, so manually
+  assigning SCB->VTOR = FLASH_BASE;	will also fix this.
+
+
+  BSD 3-Clause License
 
   Copyright (c) 2021, olikraus@gmail.com
   All rights reserved.
@@ -30,23 +50,11 @@
   OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-
-  Default clock is HSI16 (16 MHz)
-  
-  
-  Ensure that -DUSER_VECT_TAB_ADDRESS is set during compilation, otherwise
-  interrupts will not work after the "go" commant of the flashware USART upload.
-  
-  Problem is, that SCB->VTOR doesn't point to FLASH_BASE, so manually
-  assigning SCB->VTOR = FLASH_BASE;	will also fix this.
-
-  If -DUSER_VECT_TAB_ADDRESS is defined, then the SCB->VTOR is set in
-  SystemInit(void) which is called by the reset handler (.s file).
-
 */
 
 #include "stm32g0xx.h"
 #include "delay.h"
+#include "usart.h"
 
 volatile unsigned long SysTickCount = 0;
 
@@ -54,28 +62,18 @@ void __attribute__ ((interrupt, used)) SysTick_Handler(void)
 {
   SysTickCount++;  
   
-#ifdef xxx
   if ( SysTickCount & 1 )
     GPIOA->BSRR = GPIO_BSRR_BS3;		/* atomic set PA3 */
   else
     GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
-#endif
 }
 
-void usart1_write_byte(uint8_t b)
-{
-  while ( (USART1->ISR & USART_ISR_TXE_TXFNF) == 0 )
-      ;
-  USART1->TDR = b;
-  while ( (USART1->ISR & USART_ISR_TC) == 0 )
-      ;
-}
 
+static uint8_t usart_buf[32];
 
 int main()
 {
   
-  SystemCoreClockUpdate();
   
   RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
   __NOP();
@@ -91,51 +89,28 @@ int main()
   GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD3;	/* no pullup/pulldown for PA3 */
   GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
 
-    
-  RCC->APBENR2 |= RCC_APBENR2_USART1EN;
-  RCC->APBENR2 |= RCC_APBENR2_SYSCFGEN;
-  __NOP();
-  __NOP();
   
-  RCC->CCIPR &= RCC_CCIPR_USART1SEL;		// clear clock selection
-  RCC->CCIPR |= RCC_CCIPR_USART1SEL_0;	// select system clock --> 16 MHz
-
-  SYSCFG->CFGR1 |= SYSCFG_CFGR1_PA11_RMP;       // remap to A9
-  SYSCFG->CFGR1 |= SYSCFG_CFGR1_PA12_RMP;      // remap to A10
-
-  GPIOA->MODER &= ~GPIO_MODER_MODE9;  // clear mode  
-  GPIOA->MODER |= GPIO_MODER_MODE9_1;  // enable alternate functions
-  GPIOA->AFR[1] &= ~GPIO_AFRH_AFSEL9;		// clear alternate function
-  GPIOA->AFR[1] |= 1 << GPIO_AFRH_AFSEL9_Pos ;		// AF1: USART pins
-
-  GPIOA->MODER &= ~GPIO_MODER_MODE10;  // clear mode  
-  GPIOA->MODER |= GPIO_MODER_MODE10_1;  // enable alternate functions
-  GPIOA->AFR[1] &= ~GPIO_AFRH_AFSEL10;		// clear alternate function
-  GPIOA->AFR[1] |= 1 << GPIO_AFRH_AFSEL10_Pos ;		// AF1: USART pins
-
-
-  USART1->BRR = 278; 	/* 16000000/57600= 277.7 with 16x oversampling */ ;
-  //USART1->BRR = 32000000U / 9600;
-  USART1->CR1 = USART_CR1_TE | USART_CR1_RE;	/* default 8-N-1 configuration, transmit & receive enable */
-  USART1->CR2 = 0;
-  USART1->CR3 = 0;
-  USART1->PRESC = 0;
-  USART1->CR1 |= USART_CR1_UE;	/* enable usart */
+  usart1_init(115200, usart_buf, sizeof(usart_buf));
   
-
-  SysTick->LOAD = 16000*500 - 1;        // Blink with 1 Hz 
+  SysTick->LOAD = 2000*500 *16- 1;
   SysTick->VAL = 0;
   SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
     
+  
   for(;;)
   {
-    GPIOA->BSRR = GPIO_BSRR_BS3;		/* atomic set PA3 */
-    usart1_write_byte('a');
-    delay_micro_seconds(100000);
-    GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
-    usart1_write_byte('b');
-    usart1_write_byte('\n');
-    delay_micro_seconds(100000);
+    usart1_write_string("abc\n");
+    
+    
+    delay_micro_seconds(1000000);
+    for(;;)
+    {
+	int b = usart1_read_byte();
+	if ( b < 0 )
+	  break;
+	usart1_write_u16(b);
+	usart1_write_string("\n");	
+    }
     
     
   }
