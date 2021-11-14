@@ -36,7 +36,7 @@ GCCBINPATH:=/home/kraus/prg/gcc-arm-none-eabi-7-2018-q2-update/bin/
 # Project Information
 
 # The name for the project
-TARGETNAME:=blink
+TARGETNAME:=usart_test
 
 # The source files of the project
 CSRC:=$(wildcard *.c) 
@@ -133,6 +133,12 @@ upload: $(DISNAME) $(HEXNAME) $(ELFNAME)
 .PHONY: flash
 flash: $(DISNAME) $(HEXNAME) $(ELFNAME)
 	../../stlink/build/Release/bin/st-flash --format ihex write $(HEXNAME)
+
+.PHONY: catusb
+catusb:
+	stty -F /dev/ttyUSB0 speed 57600
+	stty -F /dev/ttyUSB0 -a
+	cat /dev/ttyUSB0
 
 .PHONY: clean
 clean:
