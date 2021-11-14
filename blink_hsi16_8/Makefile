@@ -130,6 +130,10 @@ upload: $(DISNAME) $(HEXNAME) $(ELFNAME)
 	/data/kraus/git/stm32flash-code/stm32flash -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
 	$(SIZE) $(ELFNAME)
 
+.PHONY: flash
+flash: $(DISNAME) $(HEXNAME) $(ELFNAME)
+	../../stlink/build/Release/bin/st-flash --format ihex write $(HEXNAME)
+
 .PHONY: clean
 clean:
 	$(RM) $(OBJ) $(HEXNAME) $(ELFNAME) $(LIBNAME) $(DISNAME) $(MAPNAME) libssp.a libssp_nonshared.a
