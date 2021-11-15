@@ -1,6 +1,6 @@
 /* 
 
-  USART echo test for the STM32L072  Project
+  USART echo test for the STM32G031  Project
 
   Configuration is 115200 8-N-1. Only "\n" is sent. Receiving terminal should add \r
   (e.g. use add CR function in "minicom")

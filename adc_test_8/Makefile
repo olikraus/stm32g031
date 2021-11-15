@@ -36,7 +36,7 @@ GCCBINPATH:=/home/kraus/prg/gcc-arm-none-eabi-7-2018-q2-update/bin/
 # Project Information
 
 # The name for the project
-TARGETNAME:=usart_echo
+TARGETNAME:=adc_test
 
 # The source files of the project
 CSRC:=$(wildcard *.c) 
@@ -136,7 +136,7 @@ flash: $(DISNAME) $(HEXNAME) $(ELFNAME)
 
 .PHONY: catusb
 catusb:
-	stty -F /dev/ttyUSB0 speed 57600
+	stty -F /dev/ttyUSB0 speed 115200
 	stty -F /dev/ttyUSB0 -a
 	cat /dev/ttyUSB0
 
