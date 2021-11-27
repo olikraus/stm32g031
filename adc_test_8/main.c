@@ -288,6 +288,34 @@ short getLMT84Temperature(unsigned short millivolt)
   return 150;
 }
 
+/* temperature is returned in 1/10 degree Celsius, 231 = 23.1 degree Celsius */
+short getLMT84LinTemp(unsigned short millivolt)
+{
+  /* 1088 --> -10 --> -100 */
+  /* 760 --> 50 --> 500 */
+  /*
+    V-V1 = (V2-V1)/(T2-T1)*(T-T1)
+    T-T1 = (V-V1)*(T2-T1)/(V2-V1)
+  
+    T2-T1 = 60
+    V2-V1 = 760 - 1088 = -328
+  
+    T = (V - 1088) * 60 / (-328) + (-10) = (1088 - V1)*60 / 328 - 10
+    T = (V - 1088) * 60 / (-328) + (-10) = (1088 - V1)*15 / 82 -10
+    *10
+    T' = (V - 1088) * 60 / (-328) + (-10) = (1088 - V1)*150/ 82 -100
+    T' = (V - 1088) * 60 / (-328) + (-10) = (1088 - V1)*75/ 41 -100
+
+    (1088-millivolt)*75  <= 24600 --> 16 bit
+  */
+  if ( millivolt > 1088 )
+    millivolt = 1088;
+  if ( millivolt < 760 )
+    millivolt = 760;
+  return (((1088-millivolt)*75)/41)-100;
+  
+}
+
 void initADC(void)
 {
   //__disable_irq();
@@ -312,7 +340,21 @@ void initADC(void)
   ADC1->IER = 0;						/* do not allow any interrupts */
   ADC1->CFGR2 &= ~ADC_CFGR2_CKMODE;	/* select HSI16 clock */
   
+  /* oversampler */
+  ADC1->CFGR2 &= ~ADC_CFGR2_OVSS;
+  ADC1->CFGR2 &= ~ADC_CFGR2_OVSR;
+  
+  ADC1->CFGR2 |= ADC_CFGR2_OVSE
+    | (4 << ADC_CFGR2_OVSS_Pos)         // bit shift
+    | (3 << ADC_CFGR2_OVSR_Pos);         // 1: 4x, 2: 8x, 3: 16x
+  
   ADC1->CR |= ADC_CR_ADVREGEN;				/* enable ADC voltage regulator, probably not required, because this is automatically activated */
+  
+  /* ADC Clock prescaler */
+  ADC->CCR &= ~ADC_CCR_PRESC;
+  ADC->CCR |= ADC_CCR_PRESC_2;                  /* divide by 0100=8 */
+  
+  
   ADC->CCR |= ADC_CCR_VREFEN; 			/* Wake-up the VREFINT */  
   ADC->CCR |= ADC_CCR_TSEN; 			/* Wake-up the temperature sensor */  
   //ADC->CCR |= ADC_CCR_VBATEN; 			/* Wake-up VBAT sensor */  
@@ -365,11 +407,17 @@ uint16_t getADC(uint8_t ch)
   ADC1->CFGR1 &= ~ADC_CFGR1_ALIGN;		/* right alignment */
   ADC1->CFGR1 &= ~ADC_CFGR1_RES;		/* 12 bit resolution */
   ADC1->CHSELR = 1<<ch; 				/* Select channel */
-  ADC1->SMPR |= ADC_SMPR_SMP1_0 | ADC_SMPR_SMP1_1 | ADC_SMPR_SMP1_2; /* Select a sampling mode of 111 (very slow)*/
-  ADC1->SMPR |= ADC_SMPR_SMP2_0 | ADC_SMPR_SMP2_1 | ADC_SMPR_SMP2_2; /* Select a sampling mode of 111 (very slow)*/
+  //ADC1->SMPR |= ADC_SMPR_SMP1_0 | ADC_SMPR_SMP1_1 | ADC_SMPR_SMP1_2; /* Select a sampling mode of 111 (very slow)*/
+  //ADC1->SMPR |= ADC_SMPR_SMP2_0 | ADC_SMPR_SMP2_1 | ADC_SMPR_SMP2_2; /* Select a sampling mode of 111 (very slow)*/
+
+  ADC1->SMPR &= ~ADC_SMPR_SMP1;
+  ADC1->SMPR &= ~ADC_SMPR_SMP2;
+  ADC1->SMPR |= ADC_SMPR_SMP1_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
+  ADC1->SMPR |= ADC_SMPR_SMP2_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
 
   /* DO CONVERSION */
-  
+
+#ifdef OLD  
   data = 0;
   for( i = 0; i < 8; i++ )
   {
@@ -383,7 +431,28 @@ uint16_t getADC(uint8_t ch)
   data >>= 3;
   
   return data;
+#endif  
+  
+    ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
+    while ((ADC1->ISR & ADC_ISR_EOC) == 0) /* wait end of conversion */
+    {
+    }
+    return ADC1->DR;						/* get ADC result and clear the ISR_EOC flag */
+  
 }
+
+/* low pass filter with 8 bit resolution, p = 0..255 */
+#define LOW_PASS_BITS 8
+int32_t low_pass(int32_t *a, int32_t x, int32_t p)
+{
+  int32_t n;
+  //n = ((1<<LOW_PASS_BITS)-p) * (*a) + p * x + (1<<(LOW_PASS_BITS-1));
+  n = ((1<<LOW_PASS_BITS)-p) * (*a) + p * x ;
+  n >>= LOW_PASS_BITS;
+  *a = n;
+  return n;
+}
+
 
 
 static uint8_t usart_buf[32];
@@ -391,6 +460,7 @@ static uint8_t usart_buf[32];
 int main()
 {
   
+    int32_t temp10_z = 0;
   
   RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
   __NOP();
@@ -406,7 +476,8 @@ int main()
   GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD3;	/* no pullup/pulldown for PA3 */
   GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
 
-  GPIOA->MODER &= ~GPIO_MODER_MODE5;	/* clear mode for PA5 */
+  //GPIOA->MODER &= ~GPIO_MODER_MODE5;	/* clear mode for PA5 */
+  GPIOA->MODER |= GPIO_MODER_MODE5;	/* analog mode for PA5 */
   GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD5;	/* no pullup/pulldown for PA5 */
   GPIOA->OTYPER &= ~GPIO_OTYPER_OT5;	/* no Push/Pull for PA5 */
 
@@ -425,8 +496,9 @@ int main()
     unsigned short supply;
     unsigned short temp_adc;
     unsigned short temp_millivolt; 
+    short temp10;
     usart1_write_string("adc temp=");
-    usart1_write_u16(getADC(12));
+    usart1_write_u16(getADC(12));    
     refint = getADC(13);
     usart1_write_string(" refint=");
     usart1_write_u16(refint);
@@ -437,15 +509,23 @@ int main()
     usart1_write_u16(getADC(4));
     usart1_write_string(" PA5=");
     temp_adc = getADC(5);
-    temp_millivolt = ((unsigned long)temp_adc*(unsigned long)supply)>>12;
     usart1_write_u16(temp_adc);
+    
+    temp_millivolt = ((unsigned long)temp_adc*(unsigned long)supply)>>12;
     usart1_write_string(" volt=");
     usart1_write_u16(temp_millivolt);
 
     usart1_write_string(" temperature=");
     usart1_write_u16(getLMT84Temperature(temp_millivolt));
-
+    usart1_write_string("  ");
+    
+    temp10 = getLMT84LinTemp(temp_millivolt);
+    usart1_write_u16(temp10);
+    usart1_write_string("  ");
+    temp10 = low_pass(&temp10_z, temp10, 50);
+    usart1_write_u16(temp10);
     usart1_write_string("\n");
+    
     delay_micro_seconds(1000000);
   }
 }
