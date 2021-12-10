@@ -56,18 +56,42 @@
 #include "delay.h"
 #include "usart.h"
 
+/* 
+  Number of calls to the SysTick handler 
+*/
 volatile unsigned long SysTickCount = 0;
+
+/*
+  Measure the number or processor clock cycles:
+  uint32_t start;
+
+  start = SysTick->VAL;
+  ...
+  getProcessorClockDelta(start); // retun the number of processor cycles since start was recorded
+
+  Limitation: The number of cycles between start and getProcessorClockDelta(start) must not exceed Systick->LOAD
+
+
+*/
+uint32_t getProcessorClockDelta(uint32_t start_value)
+{
+  uint32_t current_value = SysTick->VAL;
+  /* SysTick->VAL is decremented, so the simple case is current_value < start_value */
+  if ( current_value < start_value )
+    return start_value-current_value;
+  /* reload happend since start_value */
+  return SysTick->LOAD - current_value + start_value;
+}
+
 
 void __attribute__ ((interrupt, used)) SysTick_Handler(void)
 {
   SysTickCount++;  
   
-  /*
   if ( SysTickCount & 1 )
     GPIOA->BSRR = GPIO_BSRR_BS3;		//atomic set PA3 
   else
     GPIOA->BSRR = GPIO_BSRR_BR3;		// atomic clr PA3
-  */
 }
 
 
@@ -318,6 +342,7 @@ short getLMT84LinTemp(unsigned short millivolt)
 
 void initADC(void)
 {
+  short i;
   //__disable_irq();
   
   /* ADC Clock Enable */
@@ -345,10 +370,11 @@ void initADC(void)
   ADC1->CFGR2 &= ~ADC_CFGR2_OVSR;
   
   ADC1->CFGR2 |= ADC_CFGR2_OVSE
-    | (4 << ADC_CFGR2_OVSS_Pos)         // bit shift
-    | (3 << ADC_CFGR2_OVSR_Pos);         // 1: 4x, 2: 8x, 3: 16x
+    | (3 << ADC_CFGR2_OVSS_Pos)         // bit shift
+    | (2 << ADC_CFGR2_OVSR_Pos);         // 1: 4x, 2: 8x, 3: 16x
   
-  ADC1->CR |= ADC_CR_ADVREGEN;				/* enable ADC voltage regulator, probably not required, because this is automatically activated */
+  ADC1->CR |= ADC_CR_ADVREGEN;				/* enable ADC voltage regulator, 20us wait time required */
+  delay_micro_seconds(20);
   
   /* ADC Clock prescaler */
   ADC->CCR &= ~ADC_CCR_PRESC;
@@ -366,20 +392,19 @@ void initADC(void)
   
   if ((ADC1->CR & ADC_CR_ADEN) != 0) /* clear ADEN flag if required */
   {
-  /* is this correct, i think we must use the disable flag here */
-    ADC1->CR &= (uint32_t)(~ADC_CR_ADEN);
+    ADC1->CR &= (uint32_t)(ADC_CR_ADDIS);
   }
+  
   ADC1->CR |= ADC_CR_ADCAL; 				/* start calibration */
+  
   while ((ADC1->ISR & ADC_ISR_EOCAL) == 0) 	/* wait for clibration finished */
   {
   }
   ADC1->ISR |= ADC_ISR_EOCAL; 			/* clear the status flag, by writing 1 to it */
-  __NOP();								/* not sure why, but some nop's are required here, at least 4 of them */
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
+  
+  
+  for( i = 0; i < 48; i++ )
+    __NOP();								/* not sure why, but some nop's are required here, at least 8 of them with 16MHz */
 
   /* ENABLE ADC */
   
@@ -388,6 +413,8 @@ void initADC(void)
   while ((ADC1->ISR & ADC_ISR_ADRDY) == 0) /* wait for ADC */
   {
   }
+  
+  
 }
 
 
@@ -398,8 +425,13 @@ void initADC(void)
 */
 uint16_t getADC(uint8_t ch)
 {
-  uint32_t data;
-  uint32_t i;
+  unsigned short timeout = 20000;
+  //return 0;
+  if ( (ADC1->CR & ADC_CR_ADEN)==0 )
+  {
+    initADC();
+    return 0;
+  }
   
   /* CONFIGURE ADC */
 
@@ -417,27 +449,16 @@ uint16_t getADC(uint8_t ch)
 
   /* DO CONVERSION */
 
-#ifdef OLD  
-  data = 0;
-  for( i = 0; i < 8; i++ )
+  
+  ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
+  while ((ADC1->ISR & ADC_ISR_EOC) == 0) /* wait end of conversion */
   {
-    
-    ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
-    while ((ADC1->ISR & ADC_ISR_EOC) == 0) /* wait end of conversion */
-    {
-    }
-    data += ADC1->DR;						/* get ADC result and clear the ISR_EOC flag */
+    if ( timeout == 0 )
+      return 0;
+    timeout--;
   }
-  data >>= 3;
   
-  return data;
-#endif  
-  
-    ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
-    while ((ADC1->ISR & ADC_ISR_EOC) == 0) /* wait end of conversion */
-    {
-    }
-    return ADC1->DR;						/* get ADC result and clear the ISR_EOC flag */
+  return ADC1->DR;						/* get ADC result and clear the ISR_EOC flag */
   
 }
 
@@ -460,7 +481,8 @@ static uint8_t usart_buf[32];
 int main()
 {
   
-    int32_t temp10_z = 0;
+  int32_t temp10_z = 0;
+  SystemCoreClockUpdate();
   
   RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
   __NOP();
@@ -481,15 +503,18 @@ int main()
   GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD5;	/* no pullup/pulldown for PA5 */
   GPIOA->OTYPER &= ~GPIO_OTYPER_OT5;	/* no Push/Pull for PA5 */
 
-  
-  usart1_init(115200, usart_buf, sizeof(usart_buf));
-  initADC();
-  
   SysTick->LOAD = 2000*500 *16- 1;
   SysTick->VAL = 0;
   SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
-    
-  
+ 
+
+  usart1_init(57600, usart_buf, sizeof(usart_buf));
+
+
+  initADC();
+
+
+
   for(;;)
   {
     unsigned short refint;
@@ -497,12 +522,30 @@ int main()
     unsigned short temp_adc;
     unsigned short temp_millivolt; 
     short temp10;
-    usart1_write_string("adc temp=");
-    usart1_write_u16(getADC(12));    
+    uint32_t start_clock;
+    uint32_t delta_clock;
+
+    usart1_write_string("opt=");
+    usart1_write_bits( SYSCFG->CFGR1 , 32);
+
+
+    usart1_write_string(" adc temp=");
+    usart1_write_u16(getADC(12));
+    
+
+    start_clock = SysTick->VAL;
     refint = getADC(13);
+    delta_clock = getProcessorClockDelta(start_clock);
     usart1_write_string(" refint=");
     usart1_write_u16(refint);
+    usart1_write_string(" adc_clocks=");
+    usart1_write_u16(delta_clock);
+
+
+    if ( refint < 100 ) 
+      refint=100;
     supply = (4095UL*1212UL)/refint;
+    
     usart1_write_string(" supply=");
     usart1_write_u16(supply);
     usart1_write_string(" PA4=");
@@ -510,7 +553,7 @@ int main()
     usart1_write_string(" PA5=");
     temp_adc = getADC(5);
     usart1_write_u16(temp_adc);
-    
+
     temp_millivolt = ((unsigned long)temp_adc*(unsigned long)supply)>>12;
     usart1_write_string(" volt=");
     usart1_write_u16(temp_millivolt);

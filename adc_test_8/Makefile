@@ -127,7 +127,9 @@ all: $(DISNAME) $(HEXNAME)
 .PHONY: upload
 # stm32flash v0.5 does not support STM32L011, so use the latest snapshot 
 upload: $(DISNAME) $(HEXNAME) $(ELFNAME)
-	/data/kraus/git/stm32flash-code/stm32flash -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
+#	/data/kraus/git/stm32flash-code/stm32flash -b 19200 -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
+#	stty -F /dev/ttyUSB0 speed 57600
+	/data/kraus/git/stm32flash-code/stm32flash -n 40 -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
 	$(SIZE) $(ELFNAME)
 
 .PHONY: flash
@@ -136,7 +138,7 @@ flash: $(DISNAME) $(HEXNAME) $(ELFNAME)
 
 .PHONY: catusb
 catusb:
-	stty -F /dev/ttyUSB0 speed 115200
+	stty -F /dev/ttyUSB0 speed 57600
 	stty -F /dev/ttyUSB0 -a
 	cat /dev/ttyUSB0
 

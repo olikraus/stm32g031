@@ -97,7 +97,7 @@ int main()
   __NOP();
   __NOP();
   
-  RCC->CCIPR &= RCC_CCIPR_USART1SEL;		// clear clock selection
+  RCC->CCIPR &= ~RCC_CCIPR_USART1SEL;		// clear clock selection
   RCC->CCIPR |= RCC_CCIPR_USART1SEL_0;	// select system clock --> 16 MHz
 
   SYSCFG->CFGR1 |= SYSCFG_CFGR1_PA11_RMP;       // remap to A9

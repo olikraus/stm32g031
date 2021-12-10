@@ -10,7 +10,7 @@ static const char *u16toap(char * dest, uint16_t v)
   for( pos = 0; pos < 5; pos++ )
   {
       d = '0';
-      while( v >= c )
+      while( v >= c && d < '9' )
       {
 	v -= c;
 	d++;
@@ -44,7 +44,7 @@ static const char *u32toap(char * dest, uint32_t v)
   for( pos = 0; pos < 10; pos++ )
   {
       d = '0';
-      while( v >= c )
+      while( v >= c && d < '9' )
       {
 	v -= c;
 	d++;
