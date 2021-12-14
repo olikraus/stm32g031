@@ -63,6 +63,30 @@
 */
 volatile unsigned long SysTickCount = 0;
 
+/* state variable: defines which task to call */
+volatile uint16_t SysTickSchedulerCount = 0;
+
+/* processor cycles between calls to systick handler, should be ca. 800000 (=16MHz/20Hz) */
+uint32_t SysTickClockUsage = 0;
+
+/* duration of the systick handler */
+uint32_t SysTickClockPeriod = 0;
+
+/* a flag, which indicates that the ADC is ready */
+int16_t isADC = 0;
+
+/* the voltage applied to the microcontroller (equal to the reference voltage of the ADC) [mV] */
+uint16_t supplyVoltage = 0;
+
+/* the voltage provided by the LMT84 temperature sensore [mV] */
+uint16_t LMT84Voltage = 0;
+
+/* external temperature in 1/10 degree Celsius */
+uint16_t LMT84RawTemperature = 0;
+
+/* external filtered temperature in 1/10 degree Celsius */
+uint16_t LMT84Temperature = 0;
+
 /*
   Measure the number or processor clock cycles:
   uint32_t start;
@@ -85,17 +109,16 @@ uint32_t getProcessorClockDelta(uint32_t start_value)
   return SysTick->LOAD - current_value + start_value;
 }
 
-
-void __attribute__ ((interrupt, used)) SysTick_Handler(void)
+#define SYS_TICK_HANDLER_MS 50
+void initSysTick(void)
 {
-  SysTickCount++;  
   
-  if ( SysTickCount & 1 )
-    GPIOA->BSRR = GPIO_BSRR_BS3;		//atomic set PA3 
-  else
-    GPIOA->BSRR = GPIO_BSRR_BR3;		// atomic clr PA3
+  SysTick->LOAD = (SystemCoreClock/1000 * SYS_TICK_HANDLER_MS) -1;
+  
+  //SysTick->LOAD = 2000*500 *16- 1;
+  SysTick->VAL = 0;
+  SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
 }
-
 
 
 short lmt84_temp_millivolt[201][2] = {
@@ -346,10 +369,18 @@ short getLMT84LinTemp(unsigned short millivolt)
 
 uint16_t adcRawValues[ADC_SRC_CNT] __attribute__ ((aligned (4)));
 
+
+void startADC(void)
+{
+}
+
+/* requires proper setup of the systick timer, because a 20ms delay is needed here */
 void initADC(void)
 {
   short i;
   //__disable_irq();
+
+
   
   /* DMA Clock Enable */
   
@@ -379,7 +410,8 @@ void initADC(void)
   RCC->APBRSTR2 &= ~RCC_APBRSTR2_ADCRST;
   __NOP();								/* let us wait for some time */
   __NOP();								/* let us wait for some time */
- 
+
+
   /* ADC Basic Setup */
   
   ADC1->IER = 0;						/* do not allow any interrupts */
@@ -395,7 +427,8 @@ void initADC(void)
   
   ADC1->CR |= ADC_CR_ADVREGEN;				/* enable ADC voltage regulator, 20us wait time required */
   delay_micro_seconds(20);
-  
+
+
   /* ADC Clock prescaler */
   ADC->CCR &= ~ADC_CCR_PRESC;
   ADC->CCR |= ADC_CCR_PRESC_2;                  /* divide by 0100=8 */
@@ -421,6 +454,8 @@ void initADC(void)
   {
   }
   ADC1->ISR |= ADC_ISR_EOCAL; 			/* clear the status flag, by writing 1 to it */
+
+
   
 
   for( i = 0; i < 48; i++ )                             /* post calibration delay */
@@ -509,6 +544,7 @@ void initADC(void)
 
   ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
   
+  isADC = 1;    /* mark ADC as ready */
   
 }
 
@@ -571,6 +607,83 @@ int32_t low_pass(int32_t *a, int32_t x, int32_t p)
 
 
 
+
+
+
+void task50ms(void)
+{
+}
+
+void task100ms_0(void)
+{
+}
+
+void task100ms_1(void)
+{
+    uint16_t refint;  // bandgap has 1200 mV, so it should be 4000/3 > 1000
+    uint16_t temp_adc;
+    static int32_t temp10_z = 0;
+  
+    /* calculate the reference voltage of the ADC */
+    refint = adcRawValues[2];  // bandgap has 1200 mV, so it should be 4000/3 > 1000
+    if ( refint < 100 ) 
+      refint=100;
+    supplyVoltage = (4095UL*1212UL)/refint;
+    
+    /* calculate the voltage, which is sent by the LMT84 temperature sensor */
+    temp_adc = adcRawValues[0];
+    LMT84Voltage = ((unsigned long)temp_adc*(unsigned long)supplyVoltage)>>12;
+
+
+    LMT84RawTemperature = getLMT84LinTemp(LMT84Voltage);
+
+    LMT84Temperature = low_pass(&temp10_z, LMT84RawTemperature, 50);
+    
+    
+}
+
+
+void task1000ms(void)
+{
+    SysTickSchedulerCount = 0;
+    if ( SysTickCount & 1 )
+      GPIOA->BSRR = GPIO_BSRR_BS3;		//atomic set PA3 
+    else
+      GPIOA->BSRR = GPIO_BSRR_BR3;		// atomic clr PA3
+}
+
+void __attribute__ ((interrupt, used)) SysTick_Handler(void)
+{
+  static uint32_t start_value;
+  
+  SysTickClockPeriod = getProcessorClockDelta(start_value);
+  start_value = SysTick->VAL;
+
+  SysTickCount++;
+  SysTickSchedulerCount++;
+  task50ms();
+  if ( (SysTickSchedulerCount & 1) == 0 )
+  {
+    task100ms_0();
+  }
+  else
+  {
+    task100ms_1();
+  }
+
+  if ( SysTickSchedulerCount > 20 )
+  {
+    task1000ms();
+  }
+  
+  SysTickClockUsage = getProcessorClockDelta(start_value);
+
+}
+
+
+
+
+
 static uint8_t usart_buf[32];
 
 int main()
@@ -598,15 +711,19 @@ int main()
   GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD5;	/* no pullup/pulldown for PA5 */
   GPIOA->OTYPER &= ~GPIO_OTYPER_OT5;	/* no Push/Pull for PA5 */
 
-  SysTick->LOAD = 2000*500 *16- 1;
-  SysTick->VAL = 0;
-  SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
- 
+  // SystemCoreClock
+  //SysTick->LOAD = 2000*500 *16- 1;
+  //SysTick->VAL = 0;
+  //SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
+
+
+  initSysTick();
+
 
   usart1_init(57600, usart_buf, sizeof(usart_buf));
 
 
-  initADC();
+  initADC();            // requires a call to initSysTick()
 
 
 
@@ -617,8 +734,8 @@ int main()
     unsigned short temp_adc;
     unsigned short temp_millivolt; 
     short temp10;
-    uint32_t start_clock;
-    uint32_t delta_clock;
+    //uint32_t start_clock;
+    //uint32_t delta_clock;
 
     //usart1_write_string("CCR=");
     //usart1_write_bits( DMA1_Channel1->CCR, 32);
@@ -627,8 +744,15 @@ int main()
     //ADC_CHSELR_CHSEL13 |                /* internal reference voltage (bandgap) */
 
     
-    usart1_write_string(" CNDTR=");
-    usart1_write_u16(DMA1_Channel1->CNDTR);
+    usart1_write_string(" SysTickClockPeriod=");
+    usart1_write_u32(SysTickClockPeriod);
+
+    usart1_write_string(" SysTickClockUsage=");
+    usart1_write_u32(SysTickClockUsage);
+
+    
+    //usart1_write_string(" CNDTR=");
+    //usart1_write_u16(DMA1_Channel1->CNDTR);
 
     //usart1_write_string(" ADC DR=");
     //usart1_write_u16(ADC1->DR);
@@ -638,14 +762,14 @@ int main()
     usart1_write_u16(adcRawValues[1]);
     
 
-    start_clock = SysTick->VAL;
+    //start_clock = SysTick->VAL;
     //refint = getADC(13);
     refint = adcRawValues[2];
-    delta_clock = getProcessorClockDelta(start_clock);
+    //delta_clock = getProcessorClockDelta(start_clock);
     usart1_write_string(" refint=");
     usart1_write_u16(refint);
-    usart1_write_string(" adc_clocks=");
-    usart1_write_u16(delta_clock);
+    //usart1_write_string(" adc_clocks=");
+    //usart1_write_u16(delta_clock);
 
 
     if ( refint < 100 ) 
@@ -657,24 +781,38 @@ int main()
     //usart1_write_string(" PA4=");
     //usart1_write_u16(getADC(4));
     usart1_write_string(" PA5=");
-    //temp_adc = getADC(5);
+    
     temp_adc = adcRawValues[0];
     usart1_write_u16(temp_adc);
 
     temp_millivolt = ((unsigned long)temp_adc*(unsigned long)supply)>>12;
     usart1_write_string(" volt=");
     usart1_write_u16(temp_millivolt);
+    usart1_write_string(" >");
+    usart1_write_u16(LMT84Voltage);
 
-    usart1_write_string(" temperature=");
-    usart1_write_u16(getLMT84Temperature(temp_millivolt));
-    usart1_write_string("  ");
+    //usart1_write_string(" temperature=");
+    //usart1_write_u16(getLMT84Temperature(temp_millivolt));
+    //usart1_write_string("  ");
     
     temp10 = getLMT84LinTemp(temp_millivolt);
+    usart1_write_string("  ");
     usart1_write_u16(temp10);
+    usart1_write_string(" >");
+    usart1_write_u16(LMT84RawTemperature);
+    
+    
     usart1_write_string("  ");
     temp10 = low_pass(&temp10_z, temp10, 50);
     usart1_write_u16(temp10);
+    
+    
+    usart1_write_string(" >");
+    usart1_write_u16(LMT84Temperature);
+    
     usart1_write_string("\n");
+    
+    
     
     delay_micro_seconds(1000000);
   }
