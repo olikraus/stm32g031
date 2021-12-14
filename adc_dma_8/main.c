@@ -1,17 +1,19 @@
 /* 
 
-  ADC test for the STM32G031  Project
+  ADC with DMA for the STM32G031  Project
 
-  Configuration is 115200 8-N-1. Only "\n" is sent. Receiving terminal should add \r
+
+  Configuration is 57600 8-N-1. Only "\n" is sent. Receiving terminal should add \r
   (e.g. use add CR function in "minicom")
   
 
   Linux:
-    stty -F /dev/ttyUSB0 sane 115200 && cat /dev/ttyUSB0
-    or stty -F /dev/ttyUSB0 sane 115200 igncr  && cat /dev/ttyUSB0
-    screen /dev/ttyUSB0  115200 (terminate with "C-a k" or "C-a \")
-    minicom -D /dev/ttyUSB0  -b 115200 (terminate with "C-a x", change CR mode: "C-a u", disable HW control flow!)
+    stty -F /dev/ttyUSB0 sane 57600 && cat /dev/ttyUSB0
+    or stty -F /dev/ttyUSB0 sane 57600 igncr  && cat /dev/ttyUSB0
+    screen /dev/ttyUSB0  57600 (terminate with "C-a k" or "C-a \")
+    minicom -D /dev/ttyUSB0  -b 57600 (terminate with "C-a x", change CR mode: "C-a u", disable HW control flow!)
     
+  Baud Rates: 57600 115200
 
   Ensure that -DUSER_VECT_TAB_ADDRESS is set during compilation, otherwise
   interrupts will not work after the "go" commant of the flashware USART upload.
@@ -340,10 +342,28 @@ short getLMT84LinTemp(unsigned short millivolt)
   
 }
 
+#define ADC_SRC_CNT 3
+
+uint16_t adcRawValues[ADC_SRC_CNT] __attribute__ ((aligned (4)));
+
 void initADC(void)
 {
   short i;
   //__disable_irq();
+  
+  /* DMA Clock Enable */
+  
+  RCC->AHBENR |= RCC_AHBENR_DMA1EN;
+  __NOP();								/* let us wait for some time */
+  __NOP();								/* let us wait for some time */  
+
+  RCC->AHBRSTR |= RCC_AHBRSTR_DMA1RST;
+  __NOP();								/* let us wait for some time */
+  __NOP();								/* let us wait for some time */  
+  RCC->AHBRSTR &= ~RCC_AHBRSTR_DMA1RST;
+  __NOP();								/* let us wait for some time */
+  __NOP();								/* let us wait for some time */  
+  
   
   /* ADC Clock Enable */
   
@@ -402,10 +422,83 @@ void initADC(void)
   }
   ADC1->ISR |= ADC_ISR_EOCAL; 			/* clear the status flag, by writing 1 to it */
   
-  
-  for( i = 0; i < 48; i++ )
+
+  for( i = 0; i < 48; i++ )                             /* post calibration delay */
     __NOP();								/* not sure why, but some nop's are required here, at least 8 of them with 16MHz */
 
+    /* CONFIGURE ADC */
+
+  ADC1->SMPR &= ~ADC_SMPR_SMP1;
+  ADC1->SMPR &= ~ADC_SMPR_SMP2;
+  ADC1->SMPR |= ADC_SMPR_SMP1_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
+  ADC1->SMPR |= ADC_SMPR_SMP2_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
+
+  ADC1->CFGR1 &= ~ADC_CFGR1_EXTEN;	/* software enabled conversion start */
+  ADC1->CFGR1 &= ~ADC_CFGR1_ALIGN;		/* right alignment */
+  ADC1->CFGR1 &= ~ADC_CFGR1_RES;		/* 12 bit resolution */
+  
+  /* CONFIGURE SEQUENCER */
+  
+  ADC1->ISR &= ~ADC_ISR_CCRDY;          /* clear the channel config flag */
+  
+  ADC1->CFGR1 &= ~ADC_CFGR1_CHSELRMOD;  /* "not fully configurable" mode */
+  ADC1->CFGR1 &= ~ADC_CFGR1_SCANDIR;    /* forward scan */
+  ADC1->CHSELR = 
+    ADC_CHSELR_CHSEL5 |                 /* external temperature sensor */
+    ADC_CHSELR_CHSEL12 |                /* internal temperature sensor */
+    ADC_CHSELR_CHSEL13 ;                /* internal reference voltage (bandgap) */
+  
+  while((ADC1->ISR&ADC_ISR_CCRDY) == 0) /* wait until channel config is applied */
+  {
+  }
+
+  ADC1->CFGR1 &= ~ADC_CFGR1_DISCEN;     /* disable discontinues mode */
+  ADC1->CFGR1 |= ADC_CFGR1_CONT;        /* continues mode */
+  
+  /* DMA CONFIGURATION */
+  
+  /* How to handle OVR BIT???? */
+  ADC1->CFGR1 |= ADC_CFGR1_DMACFG;      /* DMA continues mode */
+  ADC1->CFGR1 |= ADC_CFGR1_DMAEN;      /* DMA enable */
+  
+  /* DMA CHANNEL SETUP */
+   
+  DMA1_Channel1->CPAR = (uint32_t)&(ADC1->DR);
+  DMA1_Channel1->CMAR = (uint32_t)&(adcRawValues[0]);
+  DMA1_Channel1->CNDTR = ADC_SRC_CNT;
+  DMA1_Channel1->CCR = 0; /* is it required to clear everything first? */
+  DMA1_Channel1->CCR = DMA_CCR_PL               /* highest piority */
+    | DMA_CCR_MSIZE_0                           /* 32 bit transfer memory size */
+    | DMA_CCR_PSIZE_0                           /* 32 bit peripheral size */
+    | DMA_CCR_MINC                              /* increment memory address after each transfer */
+    | DMA_CCR_CIRC                              /* repeat with inital memory address */
+          /* DIR=0: transfer from CPAR to CMAR */
+    ;
+
+  /* 
+    which DMAMUX channel is connect to which DMA channel???
+    Is mux channel 0 connected to dma channel 1 ???
+    
+    see code comment here:
+    https://vivonomicon.com/2019/07/05/bare-metal-stm32-programming-part-9-dma-megamix/
+    --> mux channel0 connects to dma1
+  */
+  DMAMUX1_Channel0->CCR = 0;
+  DMAMUX1_Channel0->CCR =  5<<DMAMUX_CxCR_DMAREQ_ID_Pos;   /* 5=ADC */
+
+
+  /*
+  DMA1
+  DMA1_Channel1
+  DMAMUX1
+  DMAMUX1_Channel0
+  DMAMUX1_RequestGenerator0
+  DMAMUX1_ChannelStatus
+  DMAMUX1_RequestGenStatus
+  */
+  
+  DMA1_Channel1->CCR |= DMA_CCR_EN;
+  
   /* ENABLE ADC */
   
   ADC1->ISR |= ADC_ISR_ADRDY; 			/* clear ready flag */
@@ -413,6 +506,8 @@ void initADC(void)
   while ((ADC1->ISR & ADC_ISR_ADRDY) == 0) /* wait for ADC */
   {
   }
+
+  ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
   
   
 }
@@ -423,7 +518,7 @@ void initADC(void)
   ch 13: vrefint
   ch 14: vbat
 */
-uint16_t getADC(uint8_t ch)
+uint16_t x_getADC(uint8_t ch)
 {
   unsigned short timeout = 20000;
   //return 0;
@@ -525,16 +620,27 @@ int main()
     uint32_t start_clock;
     uint32_t delta_clock;
 
-    //usart1_write_string("opt=");
-    //usart1_write_bits( SYSCFG->CFGR1 , 32);
+    //usart1_write_string("CCR=");
+    //usart1_write_bits( DMA1_Channel1->CCR, 32);
+    //ADC_CHSELR_CHSEL5 |                 /* external temperature sensor */
+    //ADC_CHSELR_CHSEL12 |                /* internal temperature sensor */
+    //ADC_CHSELR_CHSEL13 |                /* internal reference voltage (bandgap) */
 
+    
+    usart1_write_string(" CNDTR=");
+    usart1_write_u16(DMA1_Channel1->CNDTR);
+
+    //usart1_write_string(" ADC DR=");
+    //usart1_write_u16(ADC1->DR);
 
     usart1_write_string(" adc temp=");
-    usart1_write_u16(getADC(12));
+    //usart1_write_u16(getADC(12));
+    usart1_write_u16(adcRawValues[1]);
     
 
     start_clock = SysTick->VAL;
-    refint = getADC(13);
+    //refint = getADC(13);
+    refint = adcRawValues[2];
     delta_clock = getProcessorClockDelta(start_clock);
     usart1_write_string(" refint=");
     usart1_write_u16(refint);
@@ -551,7 +657,8 @@ int main()
     //usart1_write_string(" PA4=");
     //usart1_write_u16(getADC(4));
     usart1_write_string(" PA5=");
-    temp_adc = getADC(5);
+    //temp_adc = getADC(5);
+    temp_adc = adcRawValues[0];
     usart1_write_u16(temp_adc);
 
     temp_millivolt = ((unsigned long)temp_adc*(unsigned long)supply)>>12;
