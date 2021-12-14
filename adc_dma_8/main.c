@@ -751,63 +751,20 @@ int main()
     usart1_write_u32(SysTickClockUsage);
 
     
-    //usart1_write_string(" CNDTR=");
-    //usart1_write_u16(DMA1_Channel1->CNDTR);
-
-    //usart1_write_string(" ADC DR=");
-    //usart1_write_u16(ADC1->DR);
 
     usart1_write_string(" adc temp=");
-    //usart1_write_u16(getADC(12));
     usart1_write_u16(adcRawValues[1]);
     
 
-    //start_clock = SysTick->VAL;
-    //refint = getADC(13);
-    refint = adcRawValues[2];
-    //delta_clock = getProcessorClockDelta(start_clock);
-    usart1_write_string(" refint=");
-    usart1_write_u16(refint);
-    //usart1_write_string(" adc_clocks=");
-    //usart1_write_u16(delta_clock);
 
-
-    if ( refint < 100 ) 
-      refint=100;
-    supply = (4095UL*1212UL)/refint;
-    
-    usart1_write_string(" supply=");
-    usart1_write_u16(supply);
-    //usart1_write_string(" PA4=");
-    //usart1_write_u16(getADC(4));
-    usart1_write_string(" PA5=");
-    
-    temp_adc = adcRawValues[0];
-    usart1_write_u16(temp_adc);
-
-    temp_millivolt = ((unsigned long)temp_adc*(unsigned long)supply)>>12;
-    usart1_write_string(" volt=");
-    usart1_write_u16(temp_millivolt);
-    usart1_write_string(" >");
+    usart1_write_string(" LMT84Voltage=");
     usart1_write_u16(LMT84Voltage);
-
-    //usart1_write_string(" temperature=");
-    //usart1_write_u16(getLMT84Temperature(temp_millivolt));
-    //usart1_write_string("  ");
     
-    temp10 = getLMT84LinTemp(temp_millivolt);
     usart1_write_string("  ");
-    usart1_write_u16(temp10);
-    usart1_write_string(" >");
     usart1_write_u16(LMT84RawTemperature);
     
     
-    usart1_write_string("  ");
-    temp10 = low_pass(&temp10_z, temp10, 50);
-    usart1_write_u16(temp10);
-    
-    
-    usart1_write_string(" >");
+    usart1_write_string("  LMT84 Temperature [1/10]=");
     usart1_write_u16(LMT84Temperature);
     
     usart1_write_string("\n");
