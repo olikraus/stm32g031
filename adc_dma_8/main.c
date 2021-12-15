@@ -72,6 +72,9 @@ uint32_t SysTickClockUsage = 0;
 /* duration of the systick handler */
 uint32_t SysTickClockPeriod = 0;
 
+/* number of ADC1 end of sequence events since startup */
+uint32_t ADCEOSCnt = 0;
+
 /* a flag, which indicates that the ADC is ready */
 int16_t isADC = 0;
 
@@ -120,223 +123,6 @@ void initSysTick(void)
   SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
 }
 
-
-short lmt84_temp_millivolt[201][2] = {
-{-50,1299},
-{-49,1294},
-{-48,1289},
-{-47,1284},
-{-46,1278},
-{-45,1273},
-{-44,1268},
-{-43,1263},
-{-42,1257},
-{-41,1252},
-{-40,1247},
-{-39,1242},
-{-38,1236},
-{-37,1231},
-{-36,1226},
-{-35,1221},
-{-34,1215},
-{-33,1210},
-{-32,1205},
-{-31,1200},
-{-30,1194},
-{-29,1189},
-{-28,1184},
-{-27,1178},
-{-26,1173},
-{-25,1168},
-{-24,1162},
-{-23,1157},
-{-22,1152},
-{-21,1146},
-{-20,1141},
-{-19,1136},
-{-18,1130},
-{-17,1125},
-{-16,1120},
-{-15,1114},
-{-14,1109},
-{-13,1104},
-{-12,1098},
-{-11,1093},
-{-10,1088},
-{-9,1082},
-{-8,1077},
-{-7,1072},
-{-6,1066},
-{-5,1061},
-{-4,1055},
-{-3,1050},
-{-2,1044},
-{-1,1039},
-{0,1034},
-{1,1028},
-{2,1023},
-{3,1017},
-{4,1012},
-{5,1007},
-{6,1001},
-{7,996},
-{8,990},
-{9,985},
-{10,980},
-{11,974},
-{12,969},
-{13,963},
-{14,958},
-{15,952},
-{16,947},
-{17,941},
-{18,936},
-{19,931},
-{20,925},
-{21,920},
-{22,914},
-{23,909},
-{24,903},
-{25,898},
-{26,892},
-{27,887},
-{28,882},
-{29,876},
-{30,871},
-{31,865},
-{32,860},
-{33,854},
-{34,849},
-{35,843},
-{36,838},
-{37,832},
-{38,827},
-{39,821},
-{40,816},
-{41,810},
-{42,804},
-{43,799},
-{44,793},
-{45,788},
-{46,782},
-{47,777},
-{48,771},
-{49,766},
-{50,760},
-{51,754},
-{52,749},
-{53,743},
-{54,738},
-{55,732},
-{56,726},
-{57,721},
-{58,715},
-{59,710},
-{60,704},
-{61,698},
-{62,693},
-{63,687},
-{64,681},
-{65,676},
-{66,670},
-{67,664},
-{68,659},
-{69,653},
-{70,647},
-{71,642},
-{72,636},
-{73,630},
-{74,625},
-{75,619},
-{76,613},
-{77,608},
-{78,602},
-{79,596},
-{80,591},
-{81,585},
-{82,579},
-{83,574},
-{84,568},
-{85,562},
-{86,557},
-{87,551},
-{88,545},
-{89,539},
-{90,534},
-{91,528},
-{92,522},
-{93,517},
-{94,511},
-{95,505},
-{96,499},
-{97,494},
-{98,488},
-{99,482},
-{100,476},
-{101,471},
-{102,465},
-{103,459},
-{104,453},
-{105,448},
-{106,442},
-{107,436},
-{108,430},
-{109,425},
-{110,419},
-{111,413},
-{112,407},
-{113,401},
-{114,396},
-{115,390},
-{116,384},
-{117,378},
-{118,372},
-{119,367},
-{120,361},
-{121,355},
-{122,349},
-{123,343},
-{124,337},
-{125,332},
-{126,326},
-{127,320},
-{128,314},
-{129,308},
-{130,302},
-{131,296},
-{132,291},
-{133,285},
-{134,279},
-{135,273},
-{136,267},
-{137,261},
-{138,255},
-{139,249},
-{140,243},
-{141,237},
-{142,231},
-{143,225},
-{144,219},
-{145,213},
-{146,207},
-{147,201},
-{148,195},
-{149,189},
-{150,183},
-};
-
-
-short getLMT84Temperature(unsigned short millivolt)
-{
-  int i = 0;
-  for( i = 0; i < 200; i++ )
-  {
-    if ( millivolt >= lmt84_temp_millivolt[i][1] )
-      return lmt84_temp_millivolt[i][0];
-  }
-  return 150;
-}
-
 /* temperature is returned in 1/10 degree Celsius, 231 = 23.1 degree Celsius */
 short getLMT84LinTemp(unsigned short millivolt)
 {
@@ -372,6 +158,17 @@ uint16_t adcRawValues[ADC_SRC_CNT] __attribute__ ((aligned (4)));
 
 void startADC(void)
 {
+  DMA1_Channel1->CPAR = (uint32_t)&(ADC1->DR);
+  DMA1_Channel1->CMAR = (uint32_t)&(adcRawValues[0]);
+  DMA1_Channel1->CNDTR = ADC_SRC_CNT;
+  DMA1_Channel1->CCR = 0; /* is it required to clear everything first? */
+  DMA1_Channel1->CCR = DMA_CCR_PL               /* highest piority */
+    | DMA_CCR_MSIZE_0                           /* 32 bit transfer memory size */
+    | DMA_CCR_PSIZE_0                           /* 32 bit peripheral size */
+    | DMA_CCR_MINC                              /* increment memory address after each transfer */
+  ;
+  DMA1_Channel1->CCR |= DMA_CCR_EN;
+  ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
 }
 
 /* requires proper setup of the systick timer, because a 20ms delay is needed here */
@@ -411,6 +208,9 @@ void initADC(void)
   __NOP();								/* let us wait for some time */
   __NOP();								/* let us wait for some time */
 
+  /* Allow ADC interrupts */
+
+  NVIC_EnableIRQ(ADC1_IRQn);
 
   /* ADC Basic Setup */
   
@@ -455,9 +255,6 @@ void initADC(void)
   }
   ADC1->ISR |= ADC_ISR_EOCAL; 			/* clear the status flag, by writing 1 to it */
 
-
-  
-
   for( i = 0; i < 48; i++ )                             /* post calibration delay */
     __NOP();								/* not sure why, but some nop's are required here, at least 8 of them with 16MHz */
 
@@ -475,7 +272,12 @@ void initADC(void)
   /* CONFIGURE SEQUENCER */
   
   ADC1->ISR &= ~ADC_ISR_CCRDY;          /* clear the channel config flag */
-  
+
+/*
+  ch 12: temperture sensor
+  ch 13: vrefint
+  ch 14: vbat
+*/
   ADC1->CFGR1 &= ~ADC_CFGR1_CHSELRMOD;  /* "not fully configurable" mode */
   ADC1->CFGR1 &= ~ADC_CFGR1_SCANDIR;    /* forward scan */
   ADC1->CHSELR = 
@@ -489,6 +291,7 @@ void initADC(void)
 
   ADC1->CFGR1 &= ~ADC_CFGR1_DISCEN;     /* disable discontinues mode */
   ADC1->CFGR1 |= ADC_CFGR1_CONT;        /* continues mode */
+  //ADC1->CFGR1 &= ~ADC_CFGR1_CONT;        /* disable continues mode: excute the sequence only once  */
   
   /* DMA CONFIGURATION */
   
@@ -535,7 +338,8 @@ void initADC(void)
   DMA1_Channel1->CCR |= DMA_CCR_EN;
   
   /* ENABLE ADC */
-  
+
+  ADC1->IER |= ADC_IER_EOSIE;                    /* Enable "end of sequence" interrupt event */
   ADC1->ISR |= ADC_ISR_ADRDY; 			/* clear ready flag */
   ADC1->CR |= ADC_CR_ADEN; 			/* enable ADC */
   while ((ADC1->ISR & ADC_ISR_ADRDY) == 0) /* wait for ADC */
@@ -548,50 +352,6 @@ void initADC(void)
   
 }
 
-
-/*
-  ch 12: temperture sensor
-  ch 13: vrefint
-  ch 14: vbat
-*/
-uint16_t x_getADC(uint8_t ch)
-{
-  unsigned short timeout = 20000;
-  //return 0;
-  if ( (ADC1->CR & ADC_CR_ADEN)==0 )
-  {
-    initADC();
-    return 0;
-  }
-  
-  /* CONFIGURE ADC */
-
-  ADC1->CFGR1 &= ~ADC_CFGR1_EXTEN;	/* software enabled conversion start */
-  ADC1->CFGR1 &= ~ADC_CFGR1_ALIGN;		/* right alignment */
-  ADC1->CFGR1 &= ~ADC_CFGR1_RES;		/* 12 bit resolution */
-  ADC1->CHSELR = 1<<ch; 				/* Select channel */
-  //ADC1->SMPR |= ADC_SMPR_SMP1_0 | ADC_SMPR_SMP1_1 | ADC_SMPR_SMP1_2; /* Select a sampling mode of 111 (very slow)*/
-  //ADC1->SMPR |= ADC_SMPR_SMP2_0 | ADC_SMPR_SMP2_1 | ADC_SMPR_SMP2_2; /* Select a sampling mode of 111 (very slow)*/
-
-  ADC1->SMPR &= ~ADC_SMPR_SMP1;
-  ADC1->SMPR &= ~ADC_SMPR_SMP2;
-  ADC1->SMPR |= ADC_SMPR_SMP1_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
-  ADC1->SMPR |= ADC_SMPR_SMP2_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
-
-  /* DO CONVERSION */
-
-  
-  ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
-  while ((ADC1->ISR & ADC_ISR_EOC) == 0) /* wait end of conversion */
-  {
-    if ( timeout == 0 )
-      return 0;
-    timeout--;
-  }
-  
-  return ADC1->DR;						/* get ADC result and clear the ISR_EOC flag */
-  
-}
 
 /* low pass filter with 8 bit resolution, p = 0..255 */
 #define LOW_PASS_BITS 8
@@ -616,6 +376,7 @@ void task50ms(void)
 
 void task100ms_0(void)
 {
+  //startADC();
 }
 
 void task100ms_1(void)
@@ -681,6 +442,15 @@ void __attribute__ ((interrupt, used)) SysTick_Handler(void)
 }
 
 
+void __attribute__ ((interrupt, used)) ADC1_IRQHandler(void)
+{
+  /* Check for "end of sequence" */
+  if ( (ADC1->ISR & ADC_ISR_EOS) != 0 )
+  {
+    ADC1->ISR |= ADC_ISR_EOS;   /* clear the eos event */
+    ADCEOSCnt++;
+  }
+}
 
 
 
@@ -689,7 +459,7 @@ static uint8_t usart_buf[32];
 int main()
 {
   
-  int32_t temp10_z = 0;
+  //int32_t temp10_z = 0;
   SystemCoreClockUpdate();
   
   RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
@@ -729,11 +499,11 @@ int main()
 
   for(;;)
   {
-    unsigned short refint;
-    unsigned short supply;
-    unsigned short temp_adc;
-    unsigned short temp_millivolt; 
-    short temp10;
+    //unsigned short refint;
+    //unsigned short supply;
+    //unsigned short temp_adc;
+    //unsigned short temp_millivolt; 
+    //short temp10;
     //uint32_t start_clock;
     //uint32_t delta_clock;
 
@@ -744,8 +514,8 @@ int main()
     //ADC_CHSELR_CHSEL13 |                /* internal reference voltage (bandgap) */
 
     
-    usart1_write_string(" SysTickClockPeriod=");
-    usart1_write_u32(SysTickClockPeriod);
+    usart1_write_string(" ADCEOSCnt=");
+    usart1_write_u32(ADCEOSCnt);
 
     usart1_write_string(" SysTickClockUsage=");
     usart1_write_u32(SysTickClockUsage);
@@ -757,14 +527,14 @@ int main()
     
 
 
-    usart1_write_string(" LMT84Voltage=");
+    usart1_write_string(" LMT84Voltage [mV]=");
     usart1_write_u16(LMT84Voltage);
     
     usart1_write_string("  ");
     usart1_write_u16(LMT84RawTemperature);
     
     
-    usart1_write_string("  LMT84 Temperature [1/10]=");
+    usart1_write_string("  LMT84Temperature [1/10]=");
     usart1_write_u16(LMT84Temperature);
     
     usart1_write_string("\n");
