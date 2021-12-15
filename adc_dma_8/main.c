@@ -58,9 +58,17 @@
 #include "delay.h"
 #include "usart.h"
 
-/* 
-  Number of calls to the SysTick handler 
-*/
+/*=======================================================================*/
+/* Global variables and constants */
+/*=======================================================================*/
+
+
+/* After which time the sys tick handler is called again. */
+/* 1/SYS_TICK_HANDLER_MS is the frequency of the sys tick handler call */
+/* Should be fixed to 200Hz / 50ms */
+#define SYS_TICK_HANDLER_MS 50
+
+/* Number of calls to the SysTick handler  */
 volatile unsigned long SysTickCount = 0;
 
 /* state variable: defines which task to call */
@@ -72,11 +80,31 @@ uint32_t SysTickClockUsage = 0;
 /* duration of the systick handler */
 uint32_t SysTickClockPeriod = 0;
 
+
+/* number of ADC sources, which will be scanned and copied to ADCRawValues */
+#define ADC_SRC_CNT 3
+
+/* Raw values from the ADC1 data register, copyied to this array by DMA channel 1 */
+uint16_t ADCRawValues[ADC_SRC_CNT] __attribute__ ((aligned (4)));
+
 /* number of ADC1 end of sequence events since startup */
 uint32_t ADCEOSCnt = 0;
 
+/* systick value of the last start of the ADC (used for ADCDuration) [systicks] */
+uint32_t ADCStartTime = 0;
+
+/* the duration of the ADC converion sequence [systicks], value shoud be ca. n*2000, where n is the sequence length */ 
+/* ADCDuration seems to be 150 clocks longer if AUTOFF is active */
+uint32_t ADCDuration = 0;
+
+/* value of ADC1->ISR inside the ADC interrupt after EOS, seems to be %0000000000001010 (independent from AUTOFF flag) */
+uint32_t ADCISRAfterEOS = 0;
+
 /* a flag, which indicates that the ADC is ready */
-int16_t isADC = 0;
+int16_t isADCSetupDone = 0;
+
+/* a flag, which indicates whether the background ADC sequence conversion is active */
+int16_t ADCScanActive = 0;
 
 /* the voltage applied to the microcontroller (equal to the reference voltage of the ADC) [mV] */
 uint16_t supplyVoltage = 0;
@@ -89,6 +117,10 @@ uint16_t LMT84RawTemperature = 0;
 
 /* external filtered temperature in 1/10 degree Celsius */
 uint16_t LMT84Temperature = 0;
+
+/*=======================================================================*/
+/* Utility Procedures */
+/*=======================================================================*/
 
 /*
   Measure the number or processor clock cycles:
@@ -112,16 +144,19 @@ uint32_t getProcessorClockDelta(uint32_t start_value)
   return SysTick->LOAD - current_value + start_value;
 }
 
-#define SYS_TICK_HANDLER_MS 50
-void initSysTick(void)
+/* low pass filter with 8 bit resolution, p = 0..255 */
+#define LOW_PASS_BITS 8
+int32_t low_pass(int32_t *a, int32_t x, int32_t p)
 {
-  
-  SysTick->LOAD = (SystemCoreClock/1000 * SYS_TICK_HANDLER_MS) -1;
-  
-  //SysTick->LOAD = 2000*500 *16- 1;
-  SysTick->VAL = 0;
-  SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
+  int32_t n;
+  //n = ((1<<LOW_PASS_BITS)-p) * (*a) + p * x + (1<<(LOW_PASS_BITS-1));
+  n = ((1<<LOW_PASS_BITS)-p) * (*a) + p * x ;
+  n >>= LOW_PASS_BITS;
+  *a = n;
+  return n;
 }
+
+
 
 /* temperature is returned in 1/10 degree Celsius, 231 = 23.1 degree Celsius */
 short getLMT84LinTemp(unsigned short millivolt)
@@ -147,29 +182,67 @@ short getLMT84LinTemp(unsigned short millivolt)
     millivolt = 1088;
   if ( millivolt < 760 )
     millivolt = 760;
-  return (((1088-millivolt)*75)/41)-100;
-  
+  return (((1088-millivolt)*75)/41)-100;  
 }
 
-#define ADC_SRC_CNT 3
+/*=======================================================================*/
+/* ADC and DMA */
+/*=======================================================================*/
 
-uint16_t adcRawValues[ADC_SRC_CNT] __attribute__ ((aligned (4)));
-
-
+/*
+  Start ADC conversion sequence in background.
+  DMA will copy the data to ADCRawValues array.
+  ADC1_IRQHandler will be called at end of sequence.
+*/
 void startADC(void)
 {
+  ADCStartTime = SysTick->VAL;          /* store start time of the background sampling activity */
+  
+  DMA1_Channel1->CCR = 0; /* disable DMA */
   DMA1_Channel1->CPAR = (uint32_t)&(ADC1->DR);
-  DMA1_Channel1->CMAR = (uint32_t)&(adcRawValues[0]);
+  DMA1_Channel1->CMAR = (uint32_t)&(ADCRawValues[0]);
   DMA1_Channel1->CNDTR = ADC_SRC_CNT;
-  DMA1_Channel1->CCR = 0; /* is it required to clear everything first? */
   DMA1_Channel1->CCR = DMA_CCR_PL               /* highest piority */
     | DMA_CCR_MSIZE_0                           /* 32 bit transfer memory size */
     | DMA_CCR_PSIZE_0                           /* 32 bit peripheral size */
     | DMA_CCR_MINC                              /* increment memory address after each transfer */
-  ;
-  DMA1_Channel1->CCR |= DMA_CCR_EN;
+    | DMA_CCR_CIRC                              /* repeat with inital memory address */
+          /* DIR=0: transfer from CPAR to CMAR */
+    ;
+
+  /* 
+    DMA MUX channel 0 connected to DMA channel 1!
+    
+    see code comment here:
+    https://vivonomicon.com/2019/07/05/bare-metal-stm32-programming-part-9-dma-megamix/
+    --> mux channel0 connects to dma1
+  */
+  DMAMUX1_Channel0->CCR = 0;
+  DMAMUX1_Channel0->CCR =  5<<DMAMUX_CxCR_DMAREQ_ID_Pos;   /* 5=ADC */
+
+  DMA1_Channel1->CCR |= DMA_CCR_EN;  /* enable DMA */ 
+
+  ADCScanActive = 1;
   ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
 }
+
+/*
+  Called at the end of conversion
+*/
+void __attribute__ ((interrupt, used)) ADC1_IRQHandler(void)
+{
+  /* Check for "end of sequence" */
+  if ( (ADC1->ISR & ADC_ISR_EOS) != 0 )
+  {
+    ADCDuration = getProcessorClockDelta(ADCStartTime); /* calculate the duration of the sequence conversion. */
+    ADCISRAfterEOS = ADC1->ISR;
+    ADC1->ISR |= ADC_ISR_EOS;   /* clear the eos event */
+    ADCEOSCnt++;
+    ADCScanActive = 0;
+  }
+}
+
+
 
 /* requires proper setup of the systick timer, because a 20ms delay is needed here */
 void initADC(void)
@@ -280,6 +353,11 @@ void initADC(void)
 */
   ADC1->CFGR1 &= ~ADC_CFGR1_CHSELRMOD;  /* "not fully configurable" mode */
   ADC1->CFGR1 &= ~ADC_CFGR1_SCANDIR;    /* forward scan */
+  ADC1->CFGR1 &= ~ADC_CFGR1_DISCEN;     /* disable discontinues mode */
+  //ADC1->CFGR1 |= ADC_CFGR1_CONT;        /* continues mode */
+  ADC1->CFGR1 &= ~ADC_CFGR1_CONT;        /* disable continues mode: excute the sequence only once  */
+  ADC1->CFGR1 |= ADC_CFGR1_AUTOFF;     /* enable auto off feature, according to the datasheet, the ADRDY flag will not be raised if this feature is enabled */
+  
   ADC1->CHSELR = 
     ADC_CHSELR_CHSEL5 |                 /* external temperature sensor */
     ADC_CHSELR_CHSEL12 |                /* internal temperature sensor */
@@ -289,9 +367,6 @@ void initADC(void)
   {
   }
 
-  ADC1->CFGR1 &= ~ADC_CFGR1_DISCEN;     /* disable discontinues mode */
-  ADC1->CFGR1 |= ADC_CFGR1_CONT;        /* continues mode */
-  //ADC1->CFGR1 &= ~ADC_CFGR1_CONT;        /* disable continues mode: excute the sequence only once  */
   
   /* DMA CONFIGURATION */
   
@@ -301,10 +376,10 @@ void initADC(void)
   
   /* DMA CHANNEL SETUP */
    
+  DMA1_Channel1->CCR = 0; /* ensure to disable DMA */
   DMA1_Channel1->CPAR = (uint32_t)&(ADC1->DR);
-  DMA1_Channel1->CMAR = (uint32_t)&(adcRawValues[0]);
+  DMA1_Channel1->CMAR = (uint32_t)&(ADCRawValues[0]);
   DMA1_Channel1->CNDTR = ADC_SRC_CNT;
-  DMA1_Channel1->CCR = 0; /* is it required to clear everything first? */
   DMA1_Channel1->CCR = DMA_CCR_PL               /* highest piority */
     | DMA_CCR_MSIZE_0                           /* 32 bit transfer memory size */
     | DMA_CCR_PSIZE_0                           /* 32 bit peripheral size */
@@ -324,17 +399,7 @@ void initADC(void)
   DMAMUX1_Channel0->CCR = 0;
   DMAMUX1_Channel0->CCR =  5<<DMAMUX_CxCR_DMAREQ_ID_Pos;   /* 5=ADC */
 
-
-  /*
-  DMA1
-  DMA1_Channel1
-  DMAMUX1
-  DMAMUX1_Channel0
-  DMAMUX1_RequestGenerator0
-  DMAMUX1_ChannelStatus
-  DMAMUX1_RequestGenStatus
-  */
-  
+  /* enable DMA */  
   DMA1_Channel1->CCR |= DMA_CCR_EN;
   
   /* ENABLE ADC */
@@ -342,65 +407,76 @@ void initADC(void)
   ADC1->IER |= ADC_IER_EOSIE;                    /* Enable "end of sequence" interrupt event */
   ADC1->ISR |= ADC_ISR_ADRDY; 			/* clear ready flag */
   ADC1->CR |= ADC_CR_ADEN; 			/* enable ADC */
-  while ((ADC1->ISR & ADC_ISR_ADRDY) == 0) /* wait for ADC */
-  {
-  }
-
-  ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
   
-  isADC = 1;    /* mark ADC as ready */
+  /* according to the datasheet, the ADRDY flag is not set if the AUTOFF flag is active. */
+  /* Instead power on sequence is done automatically. */ 
+  //while ((ADC1->ISR & ADC_ISR_ADRDY) == 0) /* wait for ADC */
+  //{
+  //}
+  
+  /* let's wait for some time instead of waiting for the ADRDY flag */
+  delay_micro_seconds(20);
+
+
+  //ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
+  
+  isADCSetupDone = 1;    /* mark ADC as ready */
   
 }
 
 
-/* low pass filter with 8 bit resolution, p = 0..255 */
-#define LOW_PASS_BITS 8
-int32_t low_pass(int32_t *a, int32_t x, int32_t p)
-{
-  int32_t n;
-  //n = ((1<<LOW_PASS_BITS)-p) * (*a) + p * x + (1<<(LOW_PASS_BITS-1));
-  n = ((1<<LOW_PASS_BITS)-p) * (*a) + p * x ;
-  n >>= LOW_PASS_BITS;
-  *a = n;
-  return n;
-}
 
 
-
+/*=======================================================================*/
+/* Tasks */
+/*=======================================================================*/
 
 
 
 void task50ms(void)
 {
+  if ( ADCScanActive != 0 )
+  {
+    /* error: conversion took too long */
+  }
+  if ( ADCEOSCnt > 0 && ADCDuration < 5000 )
+  {
+    /* error: conversion was too quick, something is wrong */
+  }
 }
 
 void task100ms_0(void)
 {
-  //startADC();
+  if ( isADCSetupDone )
+  {
+    startADC();
+  }
 }
 
 void task100ms_1(void)
 {
+  if ( isADCSetupDone )
+  {
     uint16_t refint;  // bandgap has 1200 mV, so it should be 4000/3 > 1000
     uint16_t temp_adc;
     static int32_t temp10_z = 0;
   
     /* calculate the reference voltage of the ADC */
-    refint = adcRawValues[2];  // bandgap has 1200 mV, so it should be 4000/3 > 1000
+    refint = ADCRawValues[2];  // bandgap has 1200 mV, so it should be 4000/3 > 1000
     if ( refint < 100 ) 
       refint=100;
     supplyVoltage = (4095UL*1212UL)/refint;
     
     /* calculate the voltage, which is sent by the LMT84 temperature sensor */
-    temp_adc = adcRawValues[0];
+    temp_adc = ADCRawValues[0];
     LMT84Voltage = ((unsigned long)temp_adc*(unsigned long)supplyVoltage)>>12;
 
 
     LMT84RawTemperature = getLMT84LinTemp(LMT84Voltage);
 
     LMT84Temperature = low_pass(&temp10_z, LMT84RawTemperature, 50);
-    
-    
+  }
+  
 }
 
 
@@ -441,20 +517,26 @@ void __attribute__ ((interrupt, used)) SysTick_Handler(void)
 
 }
 
-
-void __attribute__ ((interrupt, used)) ADC1_IRQHandler(void)
+void initSysTick(void)
 {
-  /* Check for "end of sequence" */
-  if ( (ADC1->ISR & ADC_ISR_EOS) != 0 )
-  {
-    ADC1->ISR |= ADC_ISR_EOS;   /* clear the eos event */
-    ADCEOSCnt++;
-  }
+  
+  SysTick->LOAD = (SystemCoreClock/1000 * SYS_TICK_HANDLER_MS) -1;
+  
+  //SysTick->LOAD = 2000*500 *16- 1;
+  SysTick->VAL = 0;
+  SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
 }
 
 
 
+
+/*=======================================================================*/
+/* main */
+/*=======================================================================*/
+
 static uint8_t usart_buf[32];
+
+
 
 int main()
 {
@@ -481,19 +563,13 @@ int main()
   GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD5;	/* no pullup/pulldown for PA5 */
   GPIOA->OTYPER &= ~GPIO_OTYPER_OT5;	/* no Push/Pull for PA5 */
 
-  // SystemCoreClock
-  //SysTick->LOAD = 2000*500 *16- 1;
-  //SysTick->VAL = 0;
-  //SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
-
-
   initSysTick();
 
 
   usart1_init(57600, usart_buf, sizeof(usart_buf));
 
 
-  initADC();            // requires a call to initSysTick()
+  initADC();            // requires a call to initSysTick(), will set the isADCSetupDone flag
 
 
 
@@ -507,23 +583,20 @@ int main()
     //uint32_t start_clock;
     //uint32_t delta_clock;
 
-    //usart1_write_string("CCR=");
-    //usart1_write_bits( DMA1_Channel1->CCR, 32);
-    //ADC_CHSELR_CHSEL5 |                 /* external temperature sensor */
-    //ADC_CHSELR_CHSEL12 |                /* internal temperature sensor */
-    //ADC_CHSELR_CHSEL13 |                /* internal reference voltage (bandgap) */
+    //usart1_write_string("ADCISRAfterEOS=");
+    //usart1_write_bits( ADCISRAfterEOS, 16);
 
     
     usart1_write_string(" ADCEOSCnt=");
     usart1_write_u32(ADCEOSCnt);
 
-    usart1_write_string(" SysTickClockUsage=");
-    usart1_write_u32(SysTickClockUsage);
+    usart1_write_string(" ADCDuration=");
+    usart1_write_u32(ADCDuration);
 
     
 
     usart1_write_string(" adc temp=");
-    usart1_write_u16(adcRawValues[1]);
+    usart1_write_u16(ADCRawValues[1]);
     
 
 
