@@ -457,7 +457,7 @@ void task100ms_1(void)
 {
   if ( isADCSetupDone )
   {
-    uint16_t refint;  // bandgap has 1200 mV, so it should be 4000/3 > 1000
+    uint16_t refint;  // bandgap has 1200 mV, so it should be 2^12/3 > 1000
     uint16_t temp_adc;
     static int32_t temp10_z = 0;
   
