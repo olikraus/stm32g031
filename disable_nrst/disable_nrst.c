@@ -1,6 +1,6 @@
 /* 
   
-  enable_boot0.c
+  disable_nrst.c
   
   Copyright (c) 2021, olikraus@gmail.com
   All rights reserved.
@@ -31,22 +31,14 @@
   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.  
 
 
-  Background:
-    The BOOT0 pin is disabled for STM32G0 devices by default: The bootloader
-    will not be executed with a high level applied to BOOT0 pin during reset.
-    This means: The bootloader is not executed any more after first successful 
-    upload of any code.
-    As a result the upload via UART can be done only once for an empty device.
+  Description:
+    Disable the NRST functionality for a STM32G0 device.
+    The device will restart only with power on reset.
     
-  Solution:
-    Upload and execute this code as first and initial flash operation: 
-    It will enable the BOOT0 pin behavior, so that a high level on BOOT0 pin 
-    during reset will force the bootloader to execute.
-
   Instructions for UART uploads:
   1. Generate hex file from this code
   2. Upload and execute the generated hex file via UART (stm32flash -g 0)
-  3. Wait for 1 second: The BOOT0 pin is now activated
+  3. Wait for 1 second
   4. Upload your own code
   
   Reference:
@@ -58,10 +50,10 @@
 
 int main()
 {
-  /* check for the BOOT0 selection to avoid reflashing */  
-  if ( (FLASH->OPTR & FLASH_OPTR_nBOOT_SEL) == 0 )
+  /* check for the NRST GPIO mode */  
+  if ( (FLASH->OPTR & FLASH_OPTR_NRST_MODE_1) != 0 && (FLASH->OPTR & FLASH_OPTR_NRST_MODE_0) == 0 )
   {
-    /* nBOOT_SEL is already cleared..., do nothing */
+    /* NRST already configured as GPIO..., do nothing */
     for(;;)
       ;
   }
@@ -73,9 +65,10 @@ int main()
   FLASH->OPTKEYR = 0x08192A3B;
   FLASH->OPTKEYR = 0x4C5D6E7F;
   
-  /* Enable legacy mode (BOOT0 bit defined by BOOT0 pin) */
-  /* by clearing the nBOOT_SELection bit */
-  FLASH->OPTR &= ~FLASH_OPTR_nBOOT_SEL;
+  /* clear NRST boot mode */
+  FLASH->OPTR &= ~FLASH_OPTR_NRST_MODE_Msk;
+  /* enable GPIO mode */
+  FLASH->OPTR |= FLASH_OPTR_NRST_MODE_1;
   
   /* check if there is any flash operation */
   while( (FLASH->SR & FLASH_SR_BSY1) != 0 )
