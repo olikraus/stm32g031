@@ -36,7 +36,7 @@ GCCBINPATH:=/home/kraus/prg/gcc-arm-none-eabi-7-2018-q2-update/bin/
 # Project Information
 
 # The name for the project
-TARGETNAME:=disable_nrst
+TARGETNAME:=enable_nrst
 
 # The source files of the project
 CSRC:=$(wildcard *.c) 

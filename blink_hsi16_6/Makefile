@@ -36,7 +36,7 @@ GCCBINPATH:=/home/kraus/prg/gcc-arm-none-eabi-7-2018-q2-update/bin/
 # Project Information
 
 # The name for the project
-TARGETNAME:=disable_nrst
+TARGETNAME:=blink
 
 # The source files of the project
 CSRC:=$(wildcard *.c) 
@@ -137,11 +137,6 @@ flash: $(DISNAME) $(HEXNAME) $(ELFNAME)
 .PHONY: clean
 clean:
 	$(RM) $(OBJ) $(HEXNAME) $(ELFNAME) $(LIBNAME) $(DISNAME) $(MAPNAME) libssp.a libssp_nonshared.a
-
-.PHONY: show_option
-show_option: 
-	../../stlink/build/Release/bin/st-flash  --area=option read
-# show option reports fffffeaa for a new device
 
 # implicit rules
 .elf.hex:

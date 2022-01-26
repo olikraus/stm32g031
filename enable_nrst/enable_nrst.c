@@ -1,6 +1,6 @@
 /* 
   
-  disable_nrst.c
+  enable_nrst.c
   
   Copyright (c) 2021, olikraus@gmail.com
   All rights reserved.
@@ -32,7 +32,7 @@
 
 
   Description:
-    Disable the NRST functionality for a STM32G0 device.
+    Enable the NRST functionality for a STM32G0 device.
     The device will restart only with power on reset.
     
   Instructions for UART uploads:
@@ -41,8 +41,6 @@
   3. Wait for 1 second
   4. Upload your own code
   
-  Reference:
-  https://community.st.com/s/question/0D50X0000ARQLq2/has-anyone-gotten-the-boot0-pin-to-work-on-an-stm32g071-solved
     
 */
 
@@ -50,10 +48,10 @@
 
 int main()
 {
-  /* check for the NRST GPIO mode */  
-  if ( (FLASH->OPTR & FLASH_OPTR_NRST_MODE_1) != 0 && (FLASH->OPTR & FLASH_OPTR_NRST_MODE_0) == 0 )
+  /* check for the NRST mode */  
+  if ( (FLASH->OPTR & FLASH_OPTR_NRST_MODE_1) != 0 && (FLASH->OPTR & FLASH_OPTR_NRST_MODE_0) != 0 )
   {
-    /* NRST already configured as GPIO..., do nothing */
+    /* NRST already enabled..., do nothing */
     for(;;)
       ;
   }
@@ -65,9 +63,9 @@ int main()
   FLASH->OPTKEYR = 0x08192A3B;
   FLASH->OPTKEYR = 0x4C5D6E7F;
   
-  /* enable GPIO mode */
+  /* enable NRST */
   FLASH->OPTR |= FLASH_OPTR_NRST_MODE_1;
-  FLASH->OPTR &= ~FLASH_OPTR_NRST_MODE_0;
+  FLASH->OPTR |= FLASH_OPTR_NRST_MODE_0;
   
   /* check if there is any flash operation */
   while( (FLASH->SR & FLASH_SR_BSY1) != 0 )
