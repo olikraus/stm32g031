@@ -1,6 +1,8 @@
 /* 
 
-  ADC with DMA for the STM32G031  Project
+  RPM calculation with STM32G031
+  
+  Hall sensor at PA13
 
 
   Configuration is 57600 8-N-1. Only "\n" is sent. Receiving terminal should add \r
@@ -82,7 +84,7 @@ uint32_t SysTickClockPeriod = 0;
 
 
 /* number of ADC sources, which will be scanned and copied to ADCRawValues */
-#define ADC_SRC_CNT 3
+#define ADC_SRC_CNT 4
 
 /* Raw values from the ADC1 data register, copyied to this array by DMA channel 1 */
 uint16_t ADCRawValues[ADC_SRC_CNT] __attribute__ ((aligned (4)));
@@ -110,14 +112,16 @@ int16_t ADCScanActive = 0;
 /* the voltage applied to the microcontroller (equal to the reference voltage of the ADC) [mV] */
 uint16_t supplyVoltage = 0;
 
-/* the voltage provided by the LMT84 temperature sensore [mV] */
-//uint16_t LMT84Voltage = 0;
+/* hall raw value */
+uint16_t hallRaw = 0;
 
-/* external temperature in 1/10 degree Celsius */
-//uint16_t LMT84RawTemperature = 0;
+/* hall min and max values, both are directly taken from hallRaw */
+uint16_t hallRawMin = 0xffff;
+uint16_t hallRawMax = 0;
 
-/* external filtered temperature in 1/10 degree Celsius */
-//uint16_t LMT84Temperature = 0;
+/* stable min/max values */
+uint16_t hallMin = 0xffff;
+uint16_t hallMax = 0;
 
 /*=======================================================================*/
 /* Utility Procedures */
@@ -440,7 +444,7 @@ void initADC(void)
 
 
 
-void user_task(void)
+void user_fast_task(void)
 {
   if ( isADCSetupDone )
   {
@@ -454,21 +458,26 @@ void user_task(void)
       refint=100;
     supplyVoltage = (4095UL*1212UL)/refint;
     
-    /* calculate the voltage, which is sent by the LMT84 temperature sensor */
-    //temp_adc = ADCRawValues[0];
     
-    /*
-    LMT84Voltage = ((unsigned long)temp_adc*(unsigned long)supplyVoltage)>>12;
-    LMT84RawTemperature = getLMT84LinTemp(LMT84Voltage);
-    LMT84Temperature = low_pass(&temp10_z, LMT84RawTemperature, 50);
-    */
+    hallRaw = ADCRawValues[3];
+    if ( hallRawMin > hallRaw )
+      hallRawMin = hallRaw;
+    if ( hallRawMax < hallRaw )
+      hallRawMax = hallRaw;
+    
     
     /* restart ADC */
     startADC();
   }
-  
 }
 
+void user_slow_task(void)
+{
+  hallMin = hallRawMin;
+  hallMax = hallRawMax;
+  hallRawMin = 0xffff;
+  hallRawMax = 0;
+}
 
 void __attribute__ ((interrupt, used)) SysTick_Handler(void)
 {
@@ -480,7 +489,12 @@ void __attribute__ ((interrupt, used)) SysTick_Handler(void)
   SysTickCount++;
   SysTickSchedulerCount++;
 
-  user_task();
+  user_fast_task();
+  
+  if ( (SysTickSchedulerCount & 0x3ff) == 0x3ff )
+    user_slow_task();
+    
+    
   
   SysTickClockUsage = getProcessorClockDelta(start_value);
 
@@ -517,20 +531,26 @@ int main()
   __NOP();
   __NOP();
 
-  GPIOA->AFR[0] &= ~(0xf << (3*4));       /* clear alternative function */
-  //GPIOA->AFR[0] = 0;       /* clear alternative function */
+  //GPIOA->AFR[0] &= ~(0xf << (3*4));       /* clear alternative function */
+  GPIOA->AFR[0] = 0;       /* clear alternative function */
+  GPIOA->AFR[1] = 0;       /* clear alternative function */
   
-  GPIOA->MODER &= ~GPIO_MODER_MODE3;	/* clear mode for PA3 */
-  GPIOA->MODER |= GPIO_MODER_MODE3_0;	/* Output mode for PA3 */
-  GPIOA->OTYPER &= ~GPIO_OTYPER_OT3;	/* no Push/Pull for PA3 */
-  GPIOA->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED3;	/* low speed for PA3 */
-  GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD3;	/* no pullup/pulldown for PA3 */
-  GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
+  
+  //GPIOA->MODER &= ~GPIO_MODER_MODE3;	/* clear mode for PA3 */
+  //GPIOA->MODER |= GPIO_MODER_MODE3_0;	/* Output mode for PA3 */
+  //GPIOA->OTYPER &= ~GPIO_OTYPER_OT3;	/* no Push/Pull for PA3 */
+  //GPIOA->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED3;	/* low speed for PA3 */
+  //GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD3;	/* no pullup/pulldown for PA3 */
+  //GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
 
   //GPIOA->MODER &= ~GPIO_MODER_MODE5;	/* clear mode for PA5 */
   GPIOA->MODER |= GPIO_MODER_MODE5;	/* analog mode for PA5 */
   GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD5;	/* no pullup/pulldown for PA5 */
   GPIOA->OTYPER &= ~GPIO_OTYPER_OT5;	/* no Push/Pull for PA5 */
+
+  GPIOA->MODER |= GPIO_MODER_MODE13;	/* analog mode for PA13 */
+  GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD13;	/* no pullup/pulldown for PA13 */
+  GPIOA->OTYPER &= ~GPIO_OTYPER_OT13;	/* no Push/Pull for PA13 */
 
   initSysTick();
 
@@ -546,8 +566,8 @@ int main()
   {
 
     
-    usart1_write_string(" ADCEOSCnt=");
-    usart1_write_u32(ADCEOSCnt);
+    //usart1_write_string(" ADCEOSCnt=");
+    //usart1_write_u32(ADCEOSCnt);
 
     usart1_write_string(" SysTickClockPeriod=");
     usart1_write_u32(SysTickClockPeriod);
@@ -565,11 +585,20 @@ int main()
     usart1_write_string(" int temp [raw]=");
     usart1_write_u16(ADCRawValues[1]);
 
-    usart1_write_string(" band gap [raw]=");
-    usart1_write_u16(ADCRawValues[2]);
+    //usart1_write_string(" band gap [raw]=");
+    //usart1_write_u16(ADCRawValues[2]);
 
     usart1_write_string(" supply [mV]=");
     usart1_write_u16(supplyVoltage);
+
+    usart1_write_string(" hall raw=");
+    usart1_write_u16(ADCRawValues[3]);
+
+    usart1_write_string(" hall min/max=");
+    usart1_write_u16(hallMin);
+    usart1_write_string("/");
+    usart1_write_u16(hallMax);
+
 
     usart1_write_string("\n");
     
