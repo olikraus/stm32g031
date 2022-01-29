@@ -119,9 +119,34 @@ uint16_t hallRaw = 0;
 uint16_t hallRawMin = 0xffff;
 uint16_t hallRawMax = 0;
 
-/* stable min/max values */
+/* stable min/max/average/diff values, assigned in slow task */
 uint16_t hallMin = 0xffff;
 uint16_t hallMax = 0;
+uint16_t hallAvg = 0;   /* = (max + min) */
+uint16_t hallDiff = 0;  /* = max - min */
+uint16_t hallDiff4 = 0; /* = hallDiff/4 */
+
+/* rpm calculation state: 
+  0=not started 
+  1=wait for >hallAvg+hallDiff
+  2 = wait for < hallAvg+hallDiff
+  3 = wait for < hallAvg- hallDiff
+*/
+uint16_t rpmState = 0;
+
+/* count the length of a revolution in fast user task ticks (=1ms) */
+uint16_t rpmCount = 0;
+
+/* number of slow task ticks for one revolution (max val of  rpmCount) */
+uint16_t rpmTicksPerRevolution = 0;
+
+/* raw speed is derived from rpmTicksPerRevolution 
+  revolutions per second = frequency = 1000/rpmTicksPerRevolution
+  revolutions per minute  = 60000/rpmTicksPerRevolution
+*/
+uint16_t freqRaw = 0;
+uint16_t rpmRaw = 0;
+
 
 /*=======================================================================*/
 /* Utility Procedures */
@@ -162,33 +187,6 @@ int32_t low_pass(int32_t *a, int32_t x, int32_t p)
 }
 
 
-
-/* temperature is returned in 1/10 degree Celsius, 231 = 23.1 degree Celsius */
-short getLMT84LinTemp(unsigned short millivolt)
-{
-  /* 1088 --> -10 --> -100 */
-  /* 760 --> 50 --> 500 */
-  /*
-    V-V1 = (V2-V1)/(T2-T1)*(T-T1)
-    T-T1 = (V-V1)*(T2-T1)/(V2-V1)
-  
-    T2-T1 = 60
-    V2-V1 = 760 - 1088 = -328
-  
-    T = (V - 1088) * 60 / (-328) + (-10) = (1088 - V1)*60 / 328 - 10
-    T = (V - 1088) * 60 / (-328) + (-10) = (1088 - V1)*15 / 82 -10
-    *10
-    T' = (V - 1088) * 60 / (-328) + (-10) = (1088 - V1)*150/ 82 -100
-    T' = (V - 1088) * 60 / (-328) + (-10) = (1088 - V1)*75/ 41 -100
-
-    (1088-millivolt)*75  <= 24600 --> 16 bit
-  */
-  if ( millivolt > 1088 )
-    millivolt = 1088;
-  if ( millivolt < 760 )
-    millivolt = 760;
-  return (((1088-millivolt)*75)/41)-100;  
-}
 
 /*=======================================================================*/
 /* ADC and DMA */
@@ -458,13 +456,51 @@ void user_fast_task(void)
       refint=100;
     supplyVoltage = (4095UL*1212UL)/refint;
     
-    
+    /* Calculate the min/max values of the hall sensor */
+    /* The slow task will copy the min max values to hallMin and hallMax */
     hallRaw = ADCRawValues[3];
     if ( hallRawMin > hallRaw )
       hallRawMin = hallRaw;
     if ( hallRawMax < hallRaw )
       hallRawMax = hallRaw;
     
+    /* use hallMin and hallMax, which are drived by hallRawMin/Max but are updated only in the slow task */
+    
+    if ( rpmCount < 65000 )
+      rpmCount++;
+    
+    switch(rpmState)
+    {
+      case 0:   /* rpm calculation not yet started Will be actived in slow task */
+        break;
+      case 1:
+        if ( hallRaw > hallAvg + hallDiff4 )
+          rpmState = 2;
+        break;
+      case 2:
+        if ( hallRaw <= hallAvg + hallDiff4 )
+        {
+          rpmState = 3;
+        }
+        break;
+      case 3:
+        if ( hallRaw <= hallAvg - hallDiff4 )
+        {
+          rpmTicksPerRevolution = rpmCount;
+          if ( rpmTicksPerRevolution > 0 && rpmTicksPerRevolution <= 60000 )
+          {
+            freqRaw = 1000/rpmTicksPerRevolution;
+            rpmRaw = 60000/rpmTicksPerRevolution;
+          }
+          else 
+          {
+            rpmRaw = 0;
+          }
+          rpmCount = 0;
+          rpmState = 0;
+        }
+        break;
+    }
     
     /* restart ADC */
     startADC();
@@ -477,6 +513,13 @@ void user_slow_task(void)
   hallMax = hallRawMax;
   hallRawMin = 0xffff;
   hallRawMax = 0;
+  hallAvg = (hallMax+hallMin)/2;
+  hallDiff = hallMax-hallMin;
+  hallDiff4 = hallDiff/4;
+  if ( hallDiff4 == 0 )
+    hallDiff4 = 1;
+  if ( rpmState == 0 )  /* if the rpm calculation is not yet started, then start it */
+    rpmState = 1;
 }
 
 void __attribute__ ((interrupt, used)) SysTick_Handler(void)
@@ -602,7 +645,24 @@ int main()
 
     usart1_write_string("\n");
     
+    usart1_write_string(" hall avg/diff=");
+    usart1_write_u16(hallAvg);
+    usart1_write_string("/");
+    usart1_write_u16(hallDiff);
+
+    usart1_write_string(" rpmState=");
+    usart1_write_u16(rpmState);
+
+    usart1_write_string(" rpmTicksPerRevolution=");
+    usart1_write_u16(rpmTicksPerRevolution);
+
+    usart1_write_string(" freqRaw=");
+    usart1_write_u16(freqRaw);
     
+    usart1_write_string(" rpmRaw=");
+    usart1_write_u16(rpmRaw);
+    
+    usart1_write_string("\n");
     
     delay_micro_seconds(1000000);
   }
