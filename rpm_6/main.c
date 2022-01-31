@@ -497,7 +497,7 @@ void user_fast_task(void)
             rpmRaw = 0;
           }
           rpmCount = 0;
-          rpmState = 0;
+          rpmState = 1;
         }
         break;
     }
@@ -516,10 +516,19 @@ void user_slow_task(void)
   hallAvg = (hallMax+hallMin)/2;
   hallDiff = hallMax-hallMin;
   hallDiff4 = hallDiff/4;
-  if ( hallDiff4 == 0 )
-    hallDiff4 = 1;
-  if ( rpmState == 0 )  /* if the rpm calculation is not yet started, then start it */
-    rpmState = 1;
+  if ( hallDiff4 < 5 )
+  {
+    freqRaw = 0;
+    rpmRaw = 0;
+    rpmState = 0;
+  }
+  else
+  {
+    if ( hallDiff4 == 0 )
+      hallDiff4 = 1;
+    if ( rpmState == 0 )  /* if the rpm calculation is not yet started, then start it */
+      rpmState = 1;
+  }
 }
 
 void __attribute__ ((interrupt, used)) SysTick_Handler(void)
