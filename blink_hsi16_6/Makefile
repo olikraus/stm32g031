@@ -92,7 +92,7 @@ SIZE:=$(GCCBINPATH)arm-none-eabi-size
 
 # Common flags
 COMMON_FLAGS = -mthumb -mcpu=$(MCPU)
-COMMON_FLAGS += -DSTM32G031xx
+COMMON_FLAGS += -DSTM32G031xx -DUSER_VECT_TAB_ADDRESS
 COMMON_FLAGS += -Wall -I. -I$(SYSINC) -I$(COMMONINC) 
 # define stack size (defaults to 0x0100)  
 # COMMON_FLAGS += -D__STACK_SIZE=0x0100
@@ -105,7 +105,8 @@ COMMON_FLAGS += -Os
 # COMMON_FLAGS +=  -nostdlib
 # remove unused data and function
 #COMMON_FLAGS += -ffunction-sections -fdata-sections -fshort-wchar
-COMMON_FLAGS += -ffunction-sections -fdata-sections -DUSER_VECT_TAB_ADDRESS
+COMMON_FLAGS += -ffunction-sections -fdata-sections
+#COMMON_FLAGS += -ffunction-sections -fdata-sections -DUSER_VECT_TAB_ADDRESS
 # C flags
 CFLAGS:=$(COMMON_FLAGS) -std=gnu99 
 # LD flags
