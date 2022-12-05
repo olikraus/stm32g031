@@ -66,6 +66,8 @@ int main()
 
   //GPIOA->AFR[0] &= ~(0xf << (3*4));       /* clear alternative function */
   //GPIOA->AFR[0] = 0;       /* clear alternative function */
+
+  GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD14;	/* no pullup/pulldown for PA14 (BOOT0) */
   
   GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode for PA13 */
   GPIOA->MODER |= GPIO_MODER_MODE13_0;	/* Output mode for PA13 */
