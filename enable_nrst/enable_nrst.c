@@ -33,7 +33,8 @@
 
   Description:
     Enable the NRST functionality for a STM32G0 device.
-    The device will restart only with power on reset.
+    The device will restart only with power on reset or by pulling the NRST pin to GND.
+    See also disable_nrst.c to enable GPIO at the NRST pin.
     
   Instructions for UART uploads:
   1. Generate hex file from this code

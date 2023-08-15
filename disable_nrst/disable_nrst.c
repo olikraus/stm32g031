@@ -34,6 +34,7 @@
   Description:
     Disable the NRST functionality for a STM32G0 device.
     The device will restart only with power on reset.
+    The reset pin can then be used as normal GPIO pin.
     
   Instructions for UART uploads:
   1. Generate hex file from this code
@@ -65,7 +66,7 @@ int main()
   FLASH->OPTKEYR = 0x08192A3B;
   FLASH->OPTKEYR = 0x4C5D6E7F;
   
-  /* enable GPIO mode */
+  /* enable GPIO mode at the reset pin */
   FLASH->OPTR |= FLASH_OPTR_NRST_MODE_1;
   FLASH->OPTR &= ~FLASH_OPTR_NRST_MODE_0;
   

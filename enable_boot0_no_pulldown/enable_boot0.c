@@ -56,7 +56,7 @@
   Add on: 
   
   This code will also disable the pulldown on Boot0 pin.
-  Idea is to have a RC network at Boot0 pin (R=470MOhm, C=2.2uF) which keeps
+  Idea is to have a RC network at Boot0 pin (R=470KOhm, C=4.7uF to GND) which keeps
   the high level at Boot0 pin for a while. This means:
     - Short power off: uC will enter boot loader
     - Long power off: uC will execute user code
