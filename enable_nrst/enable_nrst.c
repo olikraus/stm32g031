@@ -64,6 +64,7 @@ int main()
   FLASH->OPTKEYR = 0x4C5D6E7F;
   
   /* enable NRST */
+  /* 11: Bidirectional reset: NRST pin configured in reset input/output mode (legacy mode), factory default */
   FLASH->OPTR |= FLASH_OPTR_NRST_MODE_1;
   FLASH->OPTR |= FLASH_OPTR_NRST_MODE_0;
   
