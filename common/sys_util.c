@@ -50,6 +50,7 @@ void set64MHzSysClk(void)
   /* 0 means HSISYS clock source */
   if ((RCC->CFGR & RCC_CFGR_SWS) != 0) 
   {
+    /* HSI is not the system clock, so enable HSI and change sys clock to HSI */
     
     /* clear all bits of the HSI divider: divide by 1, so HSISYS clock == HSI clock */
     RCC->CR &= (uint32_t) (~RCC_CR_HSIDIV);
@@ -60,15 +61,19 @@ void set64MHzSysClk(void)
     while ( (RCC->CR & RCC_CR_HSIRDY) == 0 )
       ;      
  
-       
     /* then use the HSI clock */
     /* clear all bits, which means: Use HSISYS for SYSCLK */
-    RCC->CFGR &= (uint32_t) (~RCC_CFGR_SW); 
-    
+    RCC->CFGR &= (uint32_t) (~RCC_CFGR_SW);     
     /* wait until HSI clock is used */
     while ((RCC->CFGR & RCC_CFGR_SWS) != 0)
       ;
   }
+  else
+  {
+      /* HSIDIV might not be 0, but this doesn't matter for the PLL below */
+  }
+  
+  /* At this point the HSI runs with 16 MHz */
   
   /* disable PLL */
   RCC->CR &= (uint32_t)(~RCC_CR_PLLON);
@@ -90,7 +95,6 @@ void set64MHzSysClk(void)
   /* enable instruction cache */
   FLASH->ACR |= FLASH_ACR_ICEN;
   
-  /* At this point the HSI runs with 16 MHz */
   /*
     PLL VCO Programming:
       fVCO = fPLLIN × (N / M)

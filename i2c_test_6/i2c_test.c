@@ -1,6 +1,7 @@
 
 #include "stm32g031xx.h"
 #include "delay.h"
+#include "sys_util.h"
 #include "u8x8.h"
 
 /*=======================================================================*/
@@ -23,61 +24,6 @@ void __attribute__ ((interrupt, used)) SysTick_Handler(void)
 }
 
 
-#ifdef REMOVED
-void setHSIClock()
-{
-    
-  /* test if the current clock source is something else than HSI */
-  if ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_HSI) 
-  {
-    /* enable HSI */
-    RCC->CR |= RCC_CR_HSION;    
-    /* wait until HSI becomes ready */
-    while ( (RCC->CR & RCC_CR_HSIRDY) == 0 )
-      ;      
- 
-    /* enable the HSI "divide by 4" bit */
-    RCC->CR |= (uint32_t)(RCC_CR_HSIDIVEN);
-    /* wait until the "divide by 4" flag is enabled */
-    while((RCC->CR & RCC_CR_HSIDIVF) == 0)
-      ;
-    
-       
-    /* then use the HSI clock */
-    RCC->CFGR = (RCC->CFGR & (uint32_t) (~RCC_CFGR_SW)) | RCC_CFGR_SW_HSI; 
-    
-    /* wait until HSI clock is used */
-    while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_HSI)
-      ;
-  }
-  
-  /* disable PLL */
-  RCC->CR &= (uint32_t)(~RCC_CR_PLLON);
-  /* wait until PLL is inactive */
-  while((RCC->CR & RCC_CR_PLLRDY) != 0)
-    ;
-
-  /* set latency to 1 wait state */
-  FLASH->ACR |= FLASH_ACR_LATENCY;
-  
-  /* At this point the HSI runs with 4 MHz */
-  /* Multiply by 16 device by 2 --> 32 MHz */
-  RCC->CFGR = (RCC->CFGR & (~(RCC_CFGR_PLLMUL| RCC_CFGR_PLLDIV ))) | (RCC_CFGR_PLLMUL16 | RCC_CFGR_PLLDIV2); 
-  
-  /* enable PLL */
-  RCC->CR |= RCC_CR_PLLON; 
-  
-  /* wait until the PLL is ready */
-  while ((RCC->CR & RCC_CR_PLLRDY) == 0)
-    ;
-
-  /* use the PLL has clock source */
-  RCC->CFGR |= (uint32_t) (RCC_CFGR_SW_PLL); 
-  /* wait until the PLL source is active */
-  while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) 
-    ;
-}
-#endif 
 /*
   Enable several power regions: PWR, GPIOA
 
@@ -165,12 +111,12 @@ void setRow(uint8_t r)
 
 /*==============================================*/
 volatile unsigned char i2c_mem[256];     /* contains data, which read or written */
-volatile unsigned char i2c_idx;                  /* the current index into i2c_mem */
-volatile unsigned char i2c_is_write_idx;                  /* write state */
+volatile unsigned char i2c_idx = 0;                  /* the current index into i2c_mem */
+volatile unsigned char i2c_is_write_idx;                  /* write state... 1: write I2C value to index, 0: write I2C value to memory */
 
-volatile uint16_t i2c_total_irq_cnt;
-volatile uint16_t i2c_TXIS_cnt;
-volatile uint16_t i2c_RXNE_cnt;
+volatile uint16_t i2c_total_irq_cnt = 0;
+volatile uint16_t i2c_TXIS_cnt = 0;
+volatile uint16_t i2c_RXNE_cnt = 0;
 
 
 void i2c_mem_reset_write(void)
@@ -221,10 +167,9 @@ void i2c_mem_write(unsigned char value)
 /* Pins PA9 (SCL) and PA10 (SDA) */
 void i2c_hw_init(unsigned char address)
 {
-#ifdef REMOVED
   
-  RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;		/* Enable clock for I2C */
-  RCC->IOPENR |= RCC_IOPENR_IOPAEN;		/* Enable clock for GPIO Port A */
+  RCC->APBENR1 |= RCC_APBENR1_I2C1EN;		/* Enable clock for I2C */
+  RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
   
     __NOP();                                                          /* extra delay for clock stabilization required? */
     __NOP();
@@ -233,40 +178,44 @@ void i2c_hw_init(unsigned char address)
   /* configure io */
   GPIOA->MODER &= ~GPIO_MODER_MODE9;	/* clear mode for PA9 */  
   GPIOA->MODER |= GPIO_MODER_MODE9_1;  /* alt fn */
-  GPIOA->OTYPER |= GPIO_OTYPER_OT_9;    /* open drain */
+  GPIOA->OTYPER |= GPIO_OTYPER_OT9;    /* open drain */
   GPIOA->AFR[1] &= ~(15<<4);            /* Clear Alternate Function PA9 */
-  GPIOA->AFR[1] |= 1<<4;                   /* I2C Alternate Function PA9 */
+  GPIOA->AFR[1] |= 6<<4;                   /* AF6: I2C1 SCL Alternate Function PA9 */
   
   GPIOA->MODER &= ~GPIO_MODER_MODE10;	/* clear mode for PA10 */  
   GPIOA->MODER |= GPIO_MODER_MODE10_1;  /* alt fn */
-  GPIOA->OTYPER |= GPIO_OTYPER_OT_10;    /* open drain */
+  GPIOA->OTYPER |= GPIO_OTYPER_OT10;    /* open drain */
   GPIOA->AFR[1] &= ~(15<<8);            /* Clear Alternate Function PA10 */
-  GPIOA->AFR[1] |= 1<<8;            /* I2C Alternate Function PA10 */
+  GPIOA->AFR[1] |= 6<<8;            /* AF6: I2C1 SDA Alternate Function PA10 */
   
   
   RCC->CCIPR &= ~RCC_CCIPR_I2C1SEL;                      /* write 00 to the I2C clk selection register */
-  RCC->CCIPR |= RCC_CCIPR_I2C1SEL_0;                      /* select system clock (01) */
-  
-  /* I2C init flow chart: Clear PE bit */
+  RCC->CCIPR |= RCC_CCIPR_I2C1SEL_1;                      /* select HSI16 clock (10) for I2C1 */
+
+
+  /* I2C init flow chart: Clear PE (Peripheral Enable) bit so that we can change the I2C1 configuration */
   
   I2C1->CR1 &= ~I2C_CR1_PE;             
-  
+
+
   /* I2C init flow chart: Configure filter */
   
-  /* leave at defaults */
+  I2C1->CR1 &= ~I2C_CR1_ANFOFF;          /* 0: Analog Filter enabled, suppres spikes < 50ns */
+  I2C1->CR1 &= ~I2C_CR1_DNF;            /* disable digital noise filter */
+
 
   /* I2C init flow chart: Configure timing */
   /*
-    standard mode 100kHz configuration
-    SYSCLK = I2CCLK = 32 MHz
-    PRESC = 6           bits 28..31
-    SCLL = 0x13         bits 0..7
-    SCLH = 0x0f         bits 8..15
-    SDADEL = 0x02       bits 16..19
+    standard mode 100kHz configuration (see datasheet table 169)
+    HSI16 = I2CCLK = 16 MHz
+    PRESC = 3           bits 28..31
     SCLDEL = 0x04       bits 20..23
+    SDADEL = 0x02       bits 16..19
+    SCLH = 0x0f         bits 8..15
+    SCLL = 0x13         bits 0..7
   */
-  I2C1->TIMINGR = 0x60420f13;
-  
+  I2C1->TIMINGR = 0x30420f13;
+
   /* I2C init flow chart: Configure NOSTRECH */
   
   I2C1->CR1 |= I2C_CR1_NOSTRETCH;
@@ -275,34 +224,30 @@ void i2c_hw_init(unsigned char address)
   
   I2C1->CR1 |= I2C_CR1_PE;
 
-
   /* disable OAR1 for reconfiguration */
   I2C1->OAR1 &= ~I2C_OAR1_OA1EN;
   
+  /* assign the addres (and also set 7-bit address mode */
   I2C1->OAR1 = address;
   
-  I2C1->OAR1 |= I2C_OAR1_OA1EN;
-
-
   /* enable interrupts */
   I2C1->CR1 |= I2C_CR1_STOPIE;
   I2C1->CR1 |= I2C_CR1_NACKIE;
   //I2C1->CR1 |= I2C_CR1_ADDRIE;
   I2C1->CR1 |= I2C_CR1_RXIE;
   I2C1->CR1 |= I2C_CR1_TXIE;
-  
-  
+
+  I2C1->CR1 |= I2C_CR1_ERRIE;
 
   /* load first value into TXDR register */
   I2C1->TXDR = i2c_mem[i2c_idx];
 
+  /* enabel OAR1 */
+  I2C1->OAR1 |= I2C_OAR1_OA1EN;
 
   /* enable IRQ in NVIC */
   NVIC_SetPriority(I2C1_IRQn, 0);
   NVIC_EnableIRQ(I2C1_IRQn);
-
-
-#endif  
 }
 
 void i2c_init()
@@ -318,17 +263,17 @@ void __attribute__ ((interrupt, used)) I2C1_IRQHandler(void)
 
   i2c_total_irq_cnt ++;
   
-  if ( isr & I2C_ISR_TXIS )
+  if ( isr & I2C_ISR_TXIS )     // Transmit Buffer Interrupt Status. Clear: Write to TXDR
   {
-    i2c_TXIS_cnt++;
     I2C1->TXDR = i2c_mem_read();
+    i2c_TXIS_cnt++;
   }
-  else if ( isr & I2C_ISR_RXNE )
+  else if ( isr & I2C_ISR_RXNE )        // Recevie Buffer not empty
   {
-    i2c_RXNE_cnt++;
-    i2c_mem_write(I2C1->RXDR);
+    i2c_mem_write(I2C1->RXDR);  // Write the received byte to memory: It can be the adr index or the data into memory
     I2C1->ISR |= I2C_ISR_TXE;           // allow overwriting the TCDR with new data
-    I2C1->TXDR = i2c_mem[i2c_idx];
+    I2C1->TXDR = i2c_mem[i2c_idx];  // In case master changes to read from client, put the next memory value into the TX register
+    i2c_RXNE_cnt++;
   }
   else if ( isr & I2C_ISR_STOPF )
   {
@@ -359,6 +304,23 @@ void __attribute__ ((interrupt, used)) I2C1_IRQHandler(void)
   {
     I2C1->ICR = I2C_ICR_ADDRCF;
   }
+  
+  /* check & clear also for some other flags */
+  if ( isr & I2C_ISR_BERR )
+  {
+    I2C1->ICR = I2C_ICR_BERRCF;
+    i2c_mem_reset_write();
+  }
+  if ( isr & I2C_ISR_ARLO )
+  {
+    I2C1->ICR = I2C_ICR_ARLOCF;
+    i2c_mem_reset_write();
+  }
+  if ( isr & I2C_ISR_OVR )
+  {
+    I2C1->ICR = I2C_ICR_OVRCF;
+    i2c_mem_reset_write();
+  }
     
 }
 
@@ -368,10 +330,10 @@ void __attribute__ ((interrupt, used)) I2C1_IRQHandler(void)
 int main()
 {
   SystemCoreClockUpdate();
-  //setHSIClock();
+  set64MHzSysClk();
   startUp();
   initDisplay();          /* aktivate display */
-  //i2c_init();
+  i2c_init();
 
   __enable_irq();
   
@@ -381,6 +343,9 @@ int main()
   
   for(;;)
   {
+    i2c_mem[0] = SysTickCount & 255;
+    i2c_mem[1] = (SysTickCount>>8) & 255;
+    
     setRow(2); outHex32(SysTickCount); 
     setRow(3); outHex16(i2c_total_irq_cnt);
     setRow(4); outHex16(i2c_TXIS_cnt); outStr(" "); outHex16(i2c_RXNE_cnt);
@@ -389,4 +354,6 @@ int main()
     setRow(7); outHex8(i2c_mem[0]); outStr(" "); outHex8(i2c_mem[1]); outStr(" "); outHex8(i2c_mem[2]);
     
   }
+  
+  
 }

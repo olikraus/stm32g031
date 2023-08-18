@@ -22,8 +22,8 @@ uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, 
     
       RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
       RCC->IOPENR |= RCC_IOPENR_GPIOBEN;		/* Enable clock for GPIO Port B */
-      RCC->IOPENR |= RCC_IOPENR_GPIOCEN;		/* Enable clock for GPIO Port C */
-      RCC->IOPENR |= RCC_IOPENR_GPIOFEN;		/* Enable clock for GPIO Port F */
+      //RCC->IOPENR |= RCC_IOPENR_GPIOCEN;		/* Enable clock for GPIO Port C */
+      //RCC->IOPENR |= RCC_IOPENR_GPIOFEN;		/* Enable clock for GPIO Port F */
       __NOP();
       __NOP();
     
@@ -78,7 +78,7 @@ uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, 
     case U8X8_MSG_DELAY_I2C:
       /* arg_int is 1 or 4: 100KHz (5us) or 400KHz (1.25us) */
       delay_micro_seconds(arg_int<=2?5:1);
-      delay_micro_seconds(10);
+      //delay_micro_seconds(10);
       break;
     
     case U8X8_MSG_GPIO_I2C_CLOCK:
