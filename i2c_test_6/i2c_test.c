@@ -26,8 +26,7 @@ void __attribute__ ((interrupt, used)) SysTick_Handler(void)
 #ifdef REMOVED
 void setHSIClock()
 {
-  
-  
+    
   /* test if the current clock source is something else than HSI */
   if ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_HSI) 
   {
