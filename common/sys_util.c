@@ -43,7 +43,7 @@
     R: 64MHz
   Calls SystemCoreClockUpdate() at the end to update the SystemCoreClock variable.
 */
-void set64MHzSysClk(void)
+void set_64mhz_sysclk(void)
 {
     
   /* test if the current clock source is something else than HSI */

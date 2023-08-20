@@ -67,7 +67,7 @@ int main()
   __NOP();
   __NOP();
   
-  set64MHzSysClk();
+  set_64mhz_sysclk();
 
   //GPIOA->AFR[0] &= ~(0xf << (3*4));       /* clear alternative function */
   //GPIOA->AFR[0] = 0;       /* clear alternative function */

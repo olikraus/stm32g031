@@ -49,6 +49,7 @@
 
 #include "stm32g0xx.h"
 #include "delay.h"
+#include "sys_util.h"
 #include "u8g2.h"
 
 uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr)
@@ -97,7 +98,7 @@ uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, 
       delay_micro_seconds(arg_int<=2?5:1);
       break;
     
-    case U8X8_MSG_GPIO_I2C_CLOCK:
+    case U8X8_MSG_GPIO_I2C_DATA:
       
       if ( arg_int == 0 )
       {
@@ -111,7 +112,7 @@ uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, 
 	GPIOA->MODER &= ~GPIO_MODER_MODE1;	/* clear mode for PA1: input mode */
       }
       break;
-    case U8X8_MSG_GPIO_I2C_DATA:
+    case U8X8_MSG_GPIO_I2C_CLOCK:
       
       if ( arg_int == 0 )
       {
@@ -164,18 +165,23 @@ void __attribute__ ((interrupt, used)) SysTick_Handler(void)
 }
 
 
+void drawDisplay(void)
+{
+  u8g2_SetFont(&u8g2, u8g2_font_6x12_tf);
+  u8g2_ClearBuffer(&u8g2);
+  u8g2_DrawStr(&u8g2, 0,12, "STM32G031");
+  u8g2_DrawStr(&u8g2, 0,24, u8x8_u8toa(SystemCoreClock/1000000, 2));
+  u8g2_DrawStr(&u8g2, 20,24, "MHz");
+  u8g2_DrawStr(&u8g2, 0,36, u8x8_u16toa(SysTickCount, 5));
+  u8g2_SendBuffer(&u8g2);
+}
+
 void initDisplay(void)
 {
   /* setup display */
   u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0, u8x8_byte_sw_i2c, u8x8_gpio_and_delay_stm32g0);
   u8g2_InitDisplay(&u8g2);
   u8g2_SetPowerSave(&u8g2, 0);
-  u8g2_SetFont(&u8g2, u8g2_font_6x12_tf);
-  u8g2_ClearBuffer(&u8g2);
-  u8g2_DrawStr(&u8g2, 0,12, "STM32G031");
-  u8g2_DrawStr(&u8g2, 0,24, u8x8_u8toa(SystemCoreClock/1000000, 2));
-  u8g2_DrawStr(&u8g2, 20,24, "MHz");
-  u8g2_SendBuffer(&u8g2);
 }
 
 int main()
@@ -184,6 +190,7 @@ int main()
   __NOP();
   __NOP();
 
+  set_64mhz_sysclk();  
   
   GPIOA->AFR[0] &= ~(0xf << (3*4));       /* clear alternative function */
   //GPIOA->AFR[0] = 0;       /* clear alternative function */
@@ -196,12 +203,12 @@ int main()
   GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
   
 
-  SysTick->LOAD = 16000*500 - 1;        // Blink with 1 Hz 
+  SysTick->LOAD = 16000*500 - 1;        // Blink with 4 Hz 
   SysTick->VAL = 0;
   SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
   
   initDisplay();
   
   for(;;)
-    ;
+    drawDisplay();
 }

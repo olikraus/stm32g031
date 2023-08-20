@@ -127,8 +127,13 @@ all: $(DISNAME) $(HEXNAME)
 .PHONY: upload
 # stm32flash v0.5 does not support STM32L011, so use the latest snapshot 
 upload: $(DISNAME) $(HEXNAME) $(ELFNAME)
-	/data/kraus/git/stm32flash-code/stm32flash -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
+#	/data/kraus/git/stm32flash-code/stm32flash -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
+#	/data/kraus/git/stm32flash-code/stm32flash -b 57600 -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
+#	/data/kraus/git/stm32flash-code/stm32flash -b 115200 -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
+	/data/kraus/git/stm32flash-code/stm32flash -b 230400 -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
 	$(SIZE) $(ELFNAME)
+
+
 
 .PHONY: flash
 flash: $(DISNAME) $(HEXNAME) $(ELFNAME)

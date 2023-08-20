@@ -35,6 +35,6 @@
 #ifndef _SYS_UTIL_H
 #define _SYS_UTIL_H
 
-void set64MHzSysClk(void);
+void set_64mhz_sysclk(void);
 
 #endif 

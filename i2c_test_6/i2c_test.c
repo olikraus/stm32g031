@@ -169,12 +169,15 @@ void i2c_hw_init(unsigned char address)
 {
   
   RCC->APBENR1 |= RCC_APBENR1_I2C1EN;		/* Enable clock for I2C */
+  RCC->APBENR2 |= RCC_APBENR2_SYSCFGEN;     /* Enable SYSCFG */
   RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
   
     __NOP();                                                          /* extra delay for clock stabilization required? */
     __NOP();
 
-
+  SYSCFG->CFGR1 |= SYSCFG_CFGR1_PA11_RMP;  // assign PA9 
+  SYSCFG->CFGR1 |= SYSCFG_CFGR1_PA12_RMP;  // assign PA10 
+  
   /* configure io */
   GPIOA->MODER &= ~GPIO_MODER_MODE9;	/* clear mode for PA9 */  
   GPIOA->MODER |= GPIO_MODER_MODE9_1;  /* alt fn */
@@ -347,9 +350,11 @@ int main()
     i2c_mem[1] = (SysTickCount>>8) & 255;
     
     setRow(2); outHex32(SysTickCount); 
-    setRow(3); outHex16(i2c_total_irq_cnt);
-    setRow(4); outHex16(i2c_TXIS_cnt); outStr(" "); outHex16(i2c_RXNE_cnt);
+    setRow(3); outHex16(i2c_total_irq_cnt); outStr(" "); outHex16(i2c_TXIS_cnt); outStr(" "); outHex16(i2c_RXNE_cnt);
+    setRow(4); outStr("ITLINE23:"); outHex8(SYSCFG->IT_LINE_SR[23]);  // SYSCFG_ITLINE23_SR_I2C1_GLB
     setRow(5); outStr("I2C_ISR:"); outHex32(I2C1->ISR);
+    
+    
     setRow(6); outStr("idx:    "); outHex8(i2c_idx);
     setRow(7); outHex8(i2c_mem[0]); outStr(" "); outHex8(i2c_mem[1]); outStr(" "); outHex8(i2c_mem[2]);
     
