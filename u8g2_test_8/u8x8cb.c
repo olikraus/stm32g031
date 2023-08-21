@@ -1,6 +1,6 @@
 /* 
 
-  U8g2 test with the STM32G031
+  u8x8cb.c
 
   Copyright (c) 2021, olikraus@gmail.com
   All rights reserved.
@@ -30,28 +30,12 @@
   OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.  
 
-
-  Default clock is HSI16 (16 MHz)
-    
-  Ensure that -DUSER_VECT_TAB_ADDRESS is set during compilation, otherwise
-  interrupts will not work after the "go" commant of the flashware USART upload.
-  
-  Problem is, that SCB->VTOR doesn't point to FLASH_BASE, so manually
-  assigning SCB->VTOR = FLASH_BASE;	will also fix this.
-
-  If -DUSER_VECT_TAB_ADDRESS is defined, then the SCB->VTOR is set in
-  SystemInit(void) which is called by the reset handler (.s file).
-  
-  SCL @PA2
-  SDA @PA1
-
 */
 
 #include "stm32g0xx.h"
 #include "delay.h"
-#include "sys_util.h"
-#include "adc.h"
 #include "u8g2.h"
+
 
 uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr)
 {
@@ -148,82 +132,4 @@ uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, 
       break;
   }
   return 1;
-}
-
-
-u8g2_t u8g2;
-volatile unsigned long SysTickCount = 0;
-
-
-void __attribute__ ((interrupt, used)) SysTick_Handler(void)
-{
-  SysTickCount++;  
-  
-  if ( SysTickCount & 1 )
-    GPIOA->BSRR = GPIO_BSRR_BS3;		/* atomic set PA3 */
-  else
-    GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
-}
-
-
-void drawDisplay(void)
-{
-  uint16_t refint = adc_get_value(13);  // bandgap reference 1212mV
-  uint16_t supply = (4095UL*1212UL)/refint;
-
-
-  u8g2_SetFont(&u8g2, u8g2_font_6x12_tf);
-  u8g2_ClearBuffer(&u8g2);
-  u8g2_DrawStr(&u8g2, 0,12, "STM32G031");
-  u8g2_DrawStr(&u8g2, 0,24, u8x8_u8toa(SystemCoreClock/1000000, 2));
-  u8g2_DrawStr(&u8g2, 20,24, "MHz");
-  u8g2_DrawStr(&u8g2, 0,36, "SysTick:");
-  u8g2_DrawStr(&u8g2, 75,36, u8x8_u16toa(SysTickCount, 5));
-
-  u8g2_DrawStr(&u8g2, 0,48, "PA4:");
-  u8g2_DrawStr(&u8g2, 75,48, u8x8_u16toa(adc_get_value(4), 5));
-
-  u8g2_DrawStr(&u8g2, 0,60, "Supply (mV):");
-  u8g2_DrawStr(&u8g2, 75,60, u8x8_u16toa(supply, 4));
-  
-  
-  
-  u8g2_SendBuffer(&u8g2);
-}
-
-void initDisplay(void)
-{
-  /* setup display */
-  u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0, u8x8_byte_sw_i2c, u8x8_gpio_and_delay_stm32g0);
-  u8g2_InitDisplay(&u8g2);
-  u8g2_SetPowerSave(&u8g2, 0);
-}
-
-int main()
-{
-  RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
-  __NOP();
-  __NOP();
-
-  set_64mhz_sysclk(); 
-  
-  GPIOA->AFR[0] &= ~(0xf << (3*4));       /* clear alternative function */
-  //GPIOA->AFR[0] = 0;       /* clear alternative function */
-  
-  GPIOA->MODER &= ~GPIO_MODER_MODE3;	/* clear mode for PA3 */
-  GPIOA->MODER |= GPIO_MODER_MODE3_0;	/* Output mode for PA3 */
-  GPIOA->OTYPER &= ~GPIO_OTYPER_OT3;	/* no Push/Pull for PA3 */
-  GPIOA->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED3;	/* low speed for PA3 */
-  GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD3;	/* no pullup/pulldown for PA3 */
-  GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
-  
-  SysTick->LOAD = 16000*500 - 1;        // Blink with 4 Hz 
-  SysTick->VAL = 0;
-  SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
-  
-  adc_init();
-  initDisplay();
-  
-  for(;;)
-    drawDisplay();
 }
