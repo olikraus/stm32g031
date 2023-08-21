@@ -53,103 +53,130 @@
 #include "adc.h"
 #include "u8g2.h"
 
-uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr)
-{
-  switch(msg)
-  {
-    case U8X8_MSG_GPIO_AND_DELAY_INIT:
-      /* only support for software I2C*/
-    
-      RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
-      __NOP();
-      __NOP();
+uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr);
 
-      GPIOA->MODER &= ~GPIO_MODER_MODE1;	/* clear mode for PA1 */
-      //GPIOA->MODER |= GPIO_MODER_MODE1_0;	/* Output mode for PA1 */
-      GPIOA->OTYPER &= ~GPIO_OTYPER_OT1;	/* no open drain for PA1 */
-      GPIOA->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED1;	/* low speed for PA1 */
-      GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD1;	/* no pullup/pulldown for PA1 */
-      //GPIOA->BSRR = GPIO_BSRR_BS_1;		/* atomic set PA1 */
-    
-      GPIOA->MODER &= ~GPIO_MODER_MODE2;	/* clear mode for PA2 */
-      //GPIOA->MODER |= GPIO_MODER_MODE2_0;	/* Output mode for PA2 */
-      GPIOA->OTYPER &= ~GPIO_OTYPER_OT2;	/* no open drain for PA2 */
-      GPIOA->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED2;	/* low speed for PA2 */
-      GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD2;	/* no pullup/pulldown for PA2 */
-      //GPIOA->BSRR = GPIO_BSRR_BS_2;		/* atomic set PA2 */
-        
-      break;
-    case U8X8_MSG_DELAY_NANO:
-      /* not required for SW I2C */
-      break;
-    
-    case U8X8_MSG_DELAY_10MICRO:
-      /* not used at the moment */
-      break;
-    
-    case U8X8_MSG_DELAY_100NANO:
-      /* not used at the moment */
-      break;
-   
-    case U8X8_MSG_DELAY_MILLI:
-      delay_micro_seconds(arg_int*1000UL);
-      break;
-    case U8X8_MSG_DELAY_I2C:
-      /* arg_int is 1 or 4: 100KHz (5us) or 400KHz (1.25us) */
-      delay_micro_seconds(arg_int<=2?5:1);
-      break;
-    
-    case U8X8_MSG_GPIO_I2C_DATA:
-      
-      if ( arg_int == 0 )
-      {
-	GPIOA->MODER &= ~GPIO_MODER_MODE1;	/* clear mode for PA1 */
-	GPIOA->MODER |= GPIO_MODER_MODE1_0;	/* Output mode for PA1 */
-	GPIOA->BSRR = GPIO_BSRR_BR1;		/* atomic clr PA1 */
-      }
-      else
-      {
-	//GPIOA->BSRR = GPIO_BSRR_BS_9;		/* atomic set PA1 */
-	GPIOA->MODER &= ~GPIO_MODER_MODE1;	/* clear mode for PA1: input mode */
-      }
-      break;
-    case U8X8_MSG_GPIO_I2C_CLOCK:
-      
-      if ( arg_int == 0 )
-      {
-	GPIOA->MODER &= ~GPIO_MODER_MODE2;	/* clear mode for PA2 */
-	GPIOA->MODER |= GPIO_MODER_MODE2_0;	/* Output mode for PA2 */
-	GPIOA->BSRR = GPIO_BSRR_BR2;		/* atomic clr PA2 */
-      }
-      else
-      {
-	//GPIOA->BSRR = GPIO_BSRR_BS_2;		/* atomic set PA2 */
-	// input mode
-	GPIOA->MODER &= ~GPIO_MODER_MODE2;	/* clear mode for PA10: input mode */
-      }
-      break;
+/*===========================================*/
+
 /*
-    case U8X8_MSG_GPIO_MENU_SELECT:
-      u8x8_SetGPIOResult(u8x8, Chip_GPIO_GetPinState(LPC_GPIO, KEY_SELECT_PORT, KEY_SELECT_PIN));
-      break;
-    case U8X8_MSG_GPIO_MENU_NEXT:
-      u8x8_SetGPIOResult(u8x8, Chip_GPIO_GetPinState(LPC_GPIO, KEY_NEXT_PORT, KEY_NEXT_PIN));
-      break;
-    case U8X8_MSG_GPIO_MENU_PREV:
-      u8x8_SetGPIOResult(u8x8, Chip_GPIO_GetPinState(LPC_GPIO, KEY_PREV_PORT, KEY_PREV_PIN));
-      break;
-    
-    case U8X8_MSG_GPIO_MENU_HOME:
-      u8x8_SetGPIOResult(u8x8, Chip_GPIO_GetPinState(LPC_GPIO, KEY_HOME_PORT, KEY_HOME_PIN));
-      break;
+  TIM17: PWM generation
+  Output: PB9 and PA13 via IR_OUT
+  TIM16 must be permanently 1 for IR_OUT
+    IR_OUT = POLARITY ( TIM16_CH1 NAND TIM17_CH1 )
+      --> IR polarity 1, damit das not vom NAND compensiert wird
+      TIM16_CH1 must be permanently high
+        --> TIM16 MOE (master output enable) not active
+        --> TIM16 OSSI but enable
+        --> TIM16 CCxE enabled
+        --> TIM16 OCxP set to 1 (so that OCx becomes 1)
 */
-    default:
-      u8x8_SetGPIOResult(u8x8, 1);
-      break;
-  }
-  return 1;
+
+#define TIM17_BIT_CNT 11
+#define TIM17_ARR ((1<<(TIM17_BIT_CNT))-1)
+
+void tim17_init(uint16_t hz)
+{
+  uint16_t prescaler = (SystemCoreClock >> TIM17_BIT_CNT)/(uint32_t)hz;
+  
+  RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
+  RCC->IOPENR |= RCC_IOPENR_GPIOBEN;		/* Enable clock for GPIO Port A */
+  RCC->APBENR2 |= RCC_APBENR2_TIM16EN;		/* Enable TIM16 */
+  RCC->APBENR2 |= RCC_APBENR2_TIM17EN;		/* Enable TIM17 */
+  RCC->APBENR2 |= RCC_APBENR2_SYSCFGEN;		/* Enable SysCfg  */
+  __NOP();
+  __NOP();
+
+  /*=== IR Interface ===*/
+  
+  /* TIM17_CH1 is routed via IR interface */
+  /* IR_OUT = POLARITY ( TIM16_CH1 NAND TIM17_CH1 ) --> Polarity is "NOT" to compansate the NAND */
+  SYSCFG->CFGR1 |= SYSCFG_CFGR1_IR_POL;
+  
+  /* IR mode 0: Use TIM16_CH1 */
+  SYSCFG->CFGR1 &= ~SYSCFG_CFGR1_IR_MOD;   
+  
+  /*=== PB9 ===*/
+  
+  GPIOB->MODER &= ~GPIO_MODER_MODE9;	/* clear mode */
+  GPIOB->MODER |= GPIO_MODER_MODE9_1;	/* Alternate Function mode */
+  GPIOB->OTYPER &= ~GPIO_OTYPER_OT9;	/* no Push/Pull */
+  GPIOB->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED9;	/* low speed */
+  GPIOB->PUPDR &= ~GPIO_PUPDR_PUPD9;	/* no pullup/pulldown */
+  GPIOB->BSRR = GPIO_BSRR_BR9;		/* atomic clr */
+  GPIOB->AFR[1] &= ~(15 << 4);
+  GPIOB->AFR[1] |= 0 << 4;   // AF0: IR Interface
+
+  /*=== PA13 ===*/
+  
+  GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
+  GPIOA->MODER |= GPIO_MODER_MODE13_1;	/* Alternate Function mode */
+  GPIOA->OTYPER &= ~GPIO_OTYPER_OT13;	/* no Push/Pull */
+  GPIOA->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED13;	/* low speed */
+  GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD13;	/* no pullup/pulldown */
+  GPIOA->BSRR = GPIO_BSRR_BR13;		/* atomic clr */
+  GPIOA->AFR[1] &= ~(15 << 20);
+  GPIOA->AFR[1] |= 1 << 20;   // AF1: IR Interface
+
+  /*=== TIM17 ===*/
+
+  /* configuration for PWM */
+  TIM17->CR1 = 0;               // all default values
+  TIM17->CR2 = 0;               // all default values
+  TIM17->CCER = TIM_CCER_CC1E;              // default values, output mode, output enable
+  TIM17->BDTR = TIM_BDTR_MOE;                   // main output enable (REQUIRED!)
+  TIM17->CCMR1 = (6<<TIM_CCMR1_OC1M_Pos)        // PWM Mode 1 (output high if cnt<cmp)
+                            | TIM_CCMR1_OC1PE   // preload for counter
+                            ;
+        
+  /* prescaler */
+  TIM17->PSC = prescaler-1;
+  /* auto reload register */
+  TIM17->ARR = TIM17_ARR;
+  /* Compare Register */
+  TIM17->CCR1 = TIM17_ARR/2;
+  
+  /* CR1 configuration */
+  TIM17->CR1 = TIM_CR1_ARPE  // buffered output for ARR register
+                        | TIM_CR1_CEN   // enable counter
+                        ;
+
+  /*=== TIM16 ===*/
+  
+  /* Force TIM16 output to high so that TIM17 output is passed through IR Interface */
+  
+  TIM16->CR1 = 0;               // all default values
+  TIM16->CR2 = 0;               // all default values
+  TIM16->CCER = TIM_CCER_CC1E;              // default values, output mode, output enable
+  TIM16->BDTR = TIM_BDTR_MOE;                   // main output enable (REQUIRED!)
+  TIM16->CCMR1 = 5<<TIM_CCMR1_OC1M_Pos;        // force high
 }
 
+/*
+  duty:
+    0 .. (1<<TIM17_BIT_CNT)-1
+*/
+void tim17_set_duty(uint16_t duty, uint16_t is_backward)
+{
+  TIM17->CCR1 = duty;
+  if ( is_backward )
+  {
+    GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
+    GPIOA->MODER |= GPIO_MODER_MODE13_1;	/* Alternate Function mode */
+    
+    GPIOB->MODER &= ~GPIO_MODER_MODE9;	/* clear mode */
+    GPIOB->MODER |= GPIO_MODER_MODE9_0;	/* output mode */    
+  }
+  else
+  {
+    GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
+    GPIOA->MODER |= GPIO_MODER_MODE13_0;	/* output mode */
+    
+    GPIOB->MODER &= ~GPIO_MODER_MODE9;	/* clear mode */
+    GPIOB->MODER |= GPIO_MODER_MODE9_1;	/* Alternate Function mode */
+  }
+}
+
+
+/*===========================================*/
 
 u8g2_t u8g2;
 volatile unsigned long SysTickCount = 0;
@@ -177,8 +204,16 @@ void drawDisplay(void)
   u8g2_DrawStr(&u8g2, 0,12, "STM32G031");
   u8g2_DrawStr(&u8g2, 0,24, u8x8_u8toa(SystemCoreClock/1000000, 2));
   u8g2_DrawStr(&u8g2, 20,24, "MHz");
-  u8g2_DrawStr(&u8g2, 0,36, "SysTick:");
-  u8g2_DrawStr(&u8g2, 75,36, u8x8_u16toa(SysTickCount, 5));
+  
+  //u8g2_DrawStr(&u8g2, 0,36, "SysTick:");
+  //u8g2_DrawStr(&u8g2, 75,36, u8x8_u16toa(SysTickCount, 5));
+
+  u8g2_DrawStr(&u8g2, 0,36, "TIM17:");
+  u8g2_DrawStr(&u8g2, 75,36, u8x8_u16toa(TIM17->CNT, 5));
+
+  //if ( TIM17->SR & TIM_SR_CC1IF )
+  //  u8g2_DrawStr(&u8g2, 100,12, "*");
+  //u8g2_DrawStr(&u8g2, 75,12, u8x8_u16toa(TIM17->SR, 5));
 
   u8g2_DrawStr(&u8g2, 0,48, "PA4:");
   u8g2_DrawStr(&u8g2, 75,48, u8x8_u16toa(adc_get_value(4), 5));
@@ -223,7 +258,20 @@ int main()
   
   adc_init();
   initDisplay();
+  tim17_init(10);
   
   for(;;)
+  {
+    uint16_t adc = adc_get_value(4);  // 12 Bit
+    uint16_t inv = adc >= (1<<11)?1:0;
+    if ( inv )
+      adc = adc - (1<<11);
+    else
+      adc = (1<<11) - 1 - adc;
+      
+    
+    tim17_set_duty(adc, inv);
     drawDisplay();
+  }
 }
+
