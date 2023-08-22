@@ -45,19 +45,23 @@
     - Wakeup temperature sensor
     
     this function will call delay_micro_seconds()
+    
+    configuration:
+      - PCLK/2 sync clock for ADC --> 32MHz (close to the max 35 MHz)
+      - No oversampler
+      - 12 Bit resolution
+    
 */
 void adc_init(void)
 {
   short i;
   //__disable_irq();
   
-  /* ADC Clock Enable */
+  /* ADC Clock Enable */ 
   
   RCC->APBENR2 |= RCC_APBENR2_ADCEN;	/* enable ADC clock */
   __NOP();								/* let us wait for some time */
   __NOP();								/* let us wait for some time */  
-
-
   
   /* ADC Reset */
   
@@ -72,26 +76,31 @@ void adc_init(void)
   /* ADC Basic Setup */
   
   ADC1->IER = 0;						/* do not allow any interrupts */
-  ADC1->CFGR2 &= ~ADC_CFGR2_CKMODE;	/* select HSI16 clock */
-
+  ADC1->CFGR2 &= ~ADC_CFGR2_CKMODE;	// clear the clock mode, which would the select the async clock source from RCC, which is the 64MHz system clock by default
+  /*
+    PCLK is 64MHz  
+    Instead of the async clock, select PCLK/2. --> ADC clock = 32 MHz (which is close to the max 35 MHz mentioned in the datasheet)
+  */
+  ADC1->CFGR2 |= ADC_CFGR2_CKMODE_0; // select PCLK/2 --> 32MHz ADC clock
+  
 
   /* oversampler */
-  ADC1->CFGR2 &= ~ADC_CFGR2_OVSS;
-  ADC1->CFGR2 &= ~ADC_CFGR2_OVSR;
+  ADC1->CFGR2 &= ~ADC_CFGR2_OVSE; // disable oversampler
+  ADC1->CFGR2 &= ~ADC_CFGR2_OVSS;  // clear oversampling shift
+  ADC1->CFGR2 &= ~ADC_CFGR2_OVSR;  // clear oversampling ratio
   
-  ADC1->CFGR2 |= ADC_CFGR2_OVSE
-    | (3 << ADC_CFGR2_OVSS_Pos)         // bit shift
-    | (2 << ADC_CFGR2_OVSR_Pos);         // 1: 4x, 2: 8x, 3: 16x
+  //ADC1->CFGR2 |= ADC_CFGR2_OVSE         // enable oversampler
+  //  | (3 << ADC_CFGR2_OVSS_Pos)         // bit shift cnt
+  //  | (2 << ADC_CFGR2_OVSR_Pos);         // 1: 4x, 2: 8x, 3: 16x
   
   ADC1->CR |= ADC_CR_ADVREGEN;				/* enable ADC voltage regulator, 20us wait time required */
-
 
   delay_micro_seconds(20);
 
 
   /* ADC Clock prescaler */
-  ADC->CCR &= ~ADC_CCR_PRESC;
-  ADC->CCR |= ADC_CCR_PRESC_2;                  /* divide by 0100=8 */
+  ADC->CCR &= ~ADC_CCR_PRESC;           // clear prescalar (ADC clock not divided)
+  //ADC->CCR |= ADC_CCR_PRESC_2;                  /* divide by 0100=8 */
   
   
   ADC->CCR |= ADC_CCR_VREFEN; 			/* Wake-up the VREFINT */  
@@ -120,6 +129,21 @@ void adc_init(void)
     __NOP();								/* not sure why, but some nop's are required here, at least 8 of them with 16MHz */
 
   /* ENABLE ADC */
+
+  /* minimal sampling time for both sampling values */  
+  /* 
+    1.5 clk sampling time + 12.5 conversion time for 12 bit --> 14 adc clocks @ 32MHz --> 0.44us --> 2.285.714 samples per second
+    --> 1000Hz --> 2285 samples
+  */
+  
+  ADC1->SMPR &= ~ADC_SMPR_SMP1;
+  ADC1->SMPR &= ~ADC_SMPR_SMP2;
+
+  /* ADC result configuration */
+  ADC1->CFGR1 &= ~ADC_CFGR1_ALIGN;		/* right alignment */
+  ADC1->CFGR1 &= ~ADC_CFGR1_RES;		/* 12 bit resolution */
+
+  
   
   ADC1->ISR |= ADC_ISR_ADRDY; 			/* clear ready flag */
   ADC1->CR |= ADC_CR_ADEN; 			/* enable ADC */
@@ -162,16 +186,16 @@ uint16_t adc_get_value(uint8_t ch)
   /* CONFIGURE ADC */
 
   ADC1->CFGR1 &= ~ADC_CFGR1_EXTEN;	/* software enabled conversion start */
-  ADC1->CFGR1 &= ~ADC_CFGR1_ALIGN;		/* right alignment */
-  ADC1->CFGR1 &= ~ADC_CFGR1_RES;		/* 12 bit resolution */
+  //ADC1->CFGR1 &= ~ADC_CFGR1_ALIGN;		/* right alignment */
+  //ADC1->CFGR1 &= ~ADC_CFGR1_RES;		/* 12 bit resolution */
   ADC1->CHSELR = 1<<ch; 				/* Select channel */
   //ADC1->SMPR |= ADC_SMPR_SMP1_0 | ADC_SMPR_SMP1_1 | ADC_SMPR_SMP1_2; /* Select a sampling mode of 111 (very slow)*/
   //ADC1->SMPR |= ADC_SMPR_SMP2_0 | ADC_SMPR_SMP2_1 | ADC_SMPR_SMP2_2; /* Select a sampling mode of 111 (very slow)*/
 
-  ADC1->SMPR &= ~ADC_SMPR_SMP1;
-  ADC1->SMPR &= ~ADC_SMPR_SMP2;
-  ADC1->SMPR |= ADC_SMPR_SMP1_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
-  ADC1->SMPR |= ADC_SMPR_SMP2_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
+  //ADC1->SMPR &= ~ADC_SMPR_SMP1;
+  //ADC1->SMPR &= ~ADC_SMPR_SMP2;
+  //ADC1->SMPR |= ADC_SMPR_SMP1_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
+  //ADC1->SMPR |= ADC_SMPR_SMP2_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
 
   /* DO CONVERSION */
 

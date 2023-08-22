@@ -42,6 +42,11 @@
     Q: 128MHz
     R: 64MHz
   Calls SystemCoreClockUpdate() at the end to update the SystemCoreClock variable.
+  
+  AHB and APB prescalers are not modified and kept with their reset defaults.
+  AHB prescaler: RCC->CFGR HPRE --> 000 --> HCLK = 64MHz
+  APB prescaler: RCC->CFGR PPRE --> 000 --> PCLK = 64MHz
+  
 */
 void set_64mhz_sysclk(void)
 {
@@ -110,16 +115,23 @@ void set_64mhz_sysclk(void)
       With M=2: fPLLIN / M = 8MHz
       for fVCO=256MHz, N must be 32
       
-      ADC max asyic clock is 122MHz
+      ADC max asyc clock is 122MHz
       For this we could use M=3, N=45 --> fVCO=240MHz --> with P=2 --> fPLLP=120MHz --> Sysclk=60MHz
       or:  M=4, N=61 --> fVCO=244MHz --> with P=2 --> fPLLP=122MHz --> Sysclk=61MHz
+      
+      The ADC Async clock source is selected in RCC->CCIPR and can be
+        00: System clock
+        01: PLLPCLK
+        10: HSI16       
+      
+      
   */
   
   RCC->PLLCFGR = (3<<RCC_PLLCFGR_PLLR_Pos)  // SYSCLK: fVCO division by 4 --> 64MHz
                             | RCC_PLLCFGR_PLLREN // enable fPLLR output
-                            | (1<<RCC_PLLCFGR_PLLQ_Pos) // fVCO div by 2 --> 128 MHz
+                            | (1<<RCC_PLLCFGR_PLLQ_Pos) // TIM1: fVCO div by 2 --> 128 MHz
                             | RCC_PLLCFGR_PLLQEN // enable fPLLQ
-                            | (3<<RCC_PLLCFGR_PLLP_Pos) // fVCO div by 4 --> 64 MHz 
+                            | (3<<RCC_PLLCFGR_PLLP_Pos) // ADC: fVCO div by 4 --> 64 MHz 
                             | RCC_PLLCFGR_PLLPEN // enable fPLLP
                             | (32<<RCC_PLLCFGR_PLLN_Pos)
                             | (1<<RCC_PLLCFGR_PLLM_Pos)  // value 1 means divide by 2
