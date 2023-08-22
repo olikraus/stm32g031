@@ -57,6 +57,21 @@ void adc_init(void)
   short i;
   //__disable_irq();
   
+  
+    /* DMA Clock Enable */
+  
+  RCC->AHBENR |= RCC_AHBENR_DMA1EN;
+  __NOP();								/* let us wait for some time */
+  __NOP();								/* let us wait for some time */  
+
+  RCC->AHBRSTR |= RCC_AHBRSTR_DMA1RST;
+  __NOP();								/* let us wait for some time */
+  __NOP();								/* let us wait for some time */  
+  RCC->AHBRSTR &= ~RCC_AHBRSTR_DMA1RST;
+  __NOP();								/* let us wait for some time */
+  __NOP();								/* let us wait for some time */  
+  
+
   /* ADC Clock Enable */ 
   
   RCC->APBENR2 |= RCC_APBENR2_ADCEN;	/* enable ADC clock */
@@ -175,16 +190,33 @@ void adc_init(void)
 */
 uint16_t adc_get_value(uint8_t ch)
 {
+  uint32_t dummyread;
   unsigned short timeout = 20000;
+  
   
   if ( (ADC1->CR & ADC_CR_ADEN)==0 )
   {
     adc_init();
     return 0;
   }
-  
+
+  /* stop any pending conversion */
+  ADC1->CR |= ADC_CR_ADSTP;
+  while( ADC1->CR & ADC_CR_ADSTP )      // wait until stop is executed
+      ;
+
+  /* looks like DR is somehow double buffered: do a read access to the data to remove any pending value */
+  dummyread = ADC1->DR;
+
   /* CONFIGURE ADC */
 
+  ADC1->CFGR1 &= ~ADC_CFGR1_DMAEN;              // disable DMA
+  ADC1->CFGR1 &= ~ADC_CFGR1_CONT;               // disable continues mode
+  
+  //DMA1_Channel1->CCR = 0;       // clear DMA channel register
+  //DMA1_Channel1->CNDTR = 0;                                        /* buffer size, number of ADC scans --> array length */
+  //DMAMUX1_Channel0->CCR = 0;    // clear DMA multiplexer
+  
   ADC1->CFGR1 &= ~ADC_CFGR1_EXTEN;	/* software enabled conversion start */
   //ADC1->CFGR1 &= ~ADC_CFGR1_ALIGN;		/* right alignment */
   //ADC1->CFGR1 &= ~ADC_CFGR1_RES;		/* 12 bit resolution */
@@ -199,7 +231,6 @@ uint16_t adc_get_value(uint8_t ch)
 
   /* DO CONVERSION */
 
-  
   ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
   while ((ADC1->ISR & ADC_ISR_EOC) == 0) /* wait end of conversion */
   {
@@ -207,7 +238,57 @@ uint16_t adc_get_value(uint8_t ch)
       return 0;
     timeout--;
   }
-  
   return ADC1->DR;						/* get ADC result and clear the ISR_EOC flag */
+}
+
+/*
+  read multiple ADC values
+*/
+void adc_get_multiple_values(uint16_t *adr, uint16_t cnt, uint8_t ch)
+{
   
+  /* stop any pending conversion */
+  ADC1->CR |= ADC_CR_ADSTP;
+  while( ADC1->CR & ADC_CR_ADSTP )      // wait until stop is executed
+      ;
+  
+  /* configure adc */
+
+  ADC1->CFGR1 &= ~ADC_CFGR1_DMACFG;              // disable DMA circular mode --> one shot mode
+  ADC1->CFGR1 |= ADC_CFGR1_DMAEN;              // enable DMA
+  ADC1->CFGR1 |= ADC_CFGR1_CONT;               // enable continues mode
+  
+  ADC1->CFGR1 &= ~ADC_CFGR1_EXTEN;	/* software enabled conversion start */
+  ADC1->CHSELR = 1<<ch; 				/* Select channel */
+
+  /* configure DMA */
+  
+  DMA1_Channel1->CCR = 0;       // clear DMA channel register
+  
+  DMA1_Channel1->CNDTR = cnt;                                        /* buffer size, number of ADC scans --> array length */
+  DMA1_Channel1->CPAR = (uint32_t)&(ADC1->DR);                     /* source value */
+  DMA1_Channel1->CMAR = (uint32_t)adr;                   /* destination memory */
+
+  DMA1_Channel1->CCR |= DMA_CCR_PL;		/* highes prio */   
+  DMA1_Channel1->CCR |= DMA_CCR_MINC;		/* increment memory */   
+  DMA1_Channel1->CCR |= DMA_CCR_MSIZE_0;		/* 01: 16 Bit access */   
+  DMA1_Channel1->CCR |= DMA_CCR_PSIZE_0;		/* 01: 16 Bit access */   
+
+  /* 
+    DMA MUX channel 0 connected to DMA channel 1!
+    
+    see code comment here:
+    https://vivonomicon.com/2019/07/05/bare-metal-stm32-programming-part-9-dma-megamix/
+    --> mux channel0 connects to dma1
+  */
+  DMAMUX1_Channel0->CCR = 0;
+  DMAMUX1_Channel0->CCR =  5<<DMAMUX_CxCR_DMAREQ_ID_Pos;   /* 5=ADC */
+
+  DMA1_Channel1->CCR |= DMA_CCR_EN;                /* enable */
+  
+
+  ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
+
+  delay_micro_seconds(cnt);     // test delay, conversion time is actually lesser than one 1us per sample
+
 }

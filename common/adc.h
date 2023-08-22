@@ -72,6 +72,8 @@ void adc_init(void);
 */
 uint16_t adc_get_value(uint8_t ch);
 
+void adc_get_multiple_values(uint16_t *adr, uint16_t cnt, uint8_t ch);
+
 
 #endif /* _ADC_H */
 
