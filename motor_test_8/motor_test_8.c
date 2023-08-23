@@ -1,8 +1,8 @@
 /* 
 
-  U8g2 test with the STM32G031
+  DC motor test with the STM32G031
 
-  Copyright (c) 2021, olikraus@gmail.com
+  Copyright (c) 2023, olikraus@gmail.com
   All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
@@ -57,6 +57,19 @@
   
   The code will show the value (12 bit) of the varpot on the OLED screen.
 
+TIM17 could trigger TIM1, which in turn could trigger ADC
+  --> Chapter 21.3.26 TIM1 Slave mode: Combined reset + trigger mode
+
+input start trigger for ADC EXTSEL[2:0] in CFGR1
+TRG0    TIM1_TRGO2  000
+TRG1    TIM1_CC4    001
+TRG2    TIM2_TRGO   010
+TRG3    TIM3_TRGO   011
+TRG4    TIM15_TRGO  100
+TRG5    TIM6_TRGO   101
+TRG6    TIM4_TRGO   110
+TRG7    EXTI11      111
+
 */
 
 #include "stm32g0xx.h"
@@ -91,8 +104,9 @@ void tim17_init(uint16_t hz)
   
   RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
   RCC->IOPENR |= RCC_IOPENR_GPIOBEN;		/* Enable clock for GPIO Port A */
-  RCC->APBENR2 |= RCC_APBENR2_TIM16EN;		/* Enable TIM16 */
-  RCC->APBENR2 |= RCC_APBENR2_TIM17EN;		/* Enable TIM17 */
+  RCC->APBENR2 |= RCC_APBENR2_TIM1EN;		/* Enable TIM1: Trigger for ADC */
+  RCC->APBENR2 |= RCC_APBENR2_TIM16EN;		/* Enable TIM16: Fixed to 1 for TIM17 gate in IR Interface*/
+  RCC->APBENR2 |= RCC_APBENR2_TIM17EN;		/* Enable TIM17: PWM Generator for the DC Motor */
   RCC->APBENR2 |= RCC_APBENR2_SYSCFGEN;		/* Enable SysCfg  */
   __NOP();
   __NOP();
@@ -145,11 +159,46 @@ void tim17_init(uint16_t hz)
   TIM17->ARR = TIM17_ARR;
   /* Compare Register */
   TIM17->CCR1 = TIM17_ARR/2;
+
+  TIM17->DIER = 0;
+  TIM17->DIER |= TIM_DIER_CC1IE;
+  //TIM17->DIER |= TIM_DIER_UIE;
   
+  NVIC_SetPriority(TIM17_IRQn, 0);      // level 0 is highest prio (PM0223)
+  NVIC_EnableIRQ(TIM17_IRQn);
+
   /* CR1 configuration */
   TIM17->CR1 = TIM_CR1_ARPE  // buffered output for ARR register
                         | TIM_CR1_CEN   // enable counter
                         ;
+
+
+
+  /*=== TIM1 ===*/
+  /* TIM1 will be triggered by TIM17 to generate the ADC start event (which can't be done by TIM17 */
+  
+  /* use default values for control reg. (up counting) */
+  /* this will use the reset event for TRGO0 and TRGO2 output trigger lines */
+  TIM1->CR1 = 0;
+  TIM1->CR2 = 0;                // Reset event set to TRGO2 (for ADC)
+
+  TIM1->CR1 |= TIM_CR1_OPM;             // one pulse mode
+
+  TIM1->SMCR = 0;       // clear the slave mode control registier
+  //TIM1->SMCR |= TIM_SMCR_SMS_0; 
+  //TIM1->SMCR |= TIM_SMCR_SMS_1; 
+  //TIM1->SMCR |= TIM_SMCR_SMS_2; 
+  TIM1->SMCR |= TIM_SMCR_SMS_3; // select slave mode: Combined reset + trigger mode on rising edge of trigger input
+  
+  TIM1->SMCR |= TIM_SMCR_TS_0 | TIM_SMCR_TS_1; //ITR3: TIM17 OC1 as Trigger Source 
+
+  TIM1->PSC = 50000;  // prescaler
+  TIM1->CNT = 0;
+  TIM1->ARR = 0xfff0;
+  
+  //TIM1->CR1 |= TIM_CR1_CEN;             // enable TIM1: not required, will by done by trigger event
+  
+
 
   /*=== TIM16 ===*/
   
@@ -187,6 +236,20 @@ void tim17_set_duty(uint16_t duty, uint16_t is_backward)
   }
 }
 
+#define ADC_RAW_SAMPLE_CNT 2
+uint16_t adc_raw_sample_array[ADC_RAW_SAMPLE_CNT+100] __attribute__ ((aligned (4)));
+
+void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
+{
+  uint16_t sr = TIM17->SR;
+  //if ( sr & TIM_SR_UIF )
+  //{  
+    adc_get_multiple_values(adc_raw_sample_array, ADC_RAW_SAMPLE_CNT, 4);
+  //}
+  TIM17->SR = 0;        // status must be cleared otherwise another IRQ is generated
+  
+}
+
 
 /*===========================================*/
 
@@ -204,9 +267,6 @@ void __attribute__ ((interrupt, used)) SysTick_Handler(void)
     GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
 }
 
-#define ADC_RAW_SAMPLE_CNT 2
-
-uint16_t adc_raw_sample_array[ADC_RAW_SAMPLE_CNT+100] __attribute__ ((aligned (4)));
 
 
 void drawDisplay(void)
@@ -221,8 +281,8 @@ void drawDisplay(void)
   u8g2_DrawStr(&u8g2, 70,12, u8x8_u8toa(SystemCoreClock/1000000, 2));
   u8g2_DrawStr(&u8g2, 85,12, "MHz");
 
-  u8g2_DrawStr(&u8g2, 0,24, "TIM17:");
-  u8g2_DrawStr(&u8g2, 75,24, u8x8_u16toa(TIM17->CNT, 5));
+  u8g2_DrawStr(&u8g2, 0,24, "TIM1:");
+  u8g2_DrawStr(&u8g2, 75,24, u8x8_u16toa(TIM1->CNT, 5));
 
   
   u8g2_DrawStr(&u8g2, 0,36, "PA4:");
@@ -281,7 +341,6 @@ int main()
   
   for(;;)
   {
-    adc_get_multiple_values(adc_raw_sample_array, ADC_RAW_SAMPLE_CNT, 4);
 
     drawDisplay();
     

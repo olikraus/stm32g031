@@ -190,9 +190,8 @@ void adc_init(void)
 */
 uint16_t adc_get_value(uint8_t ch)
 {
-  uint32_t dummyread;
+  uint32_t dummyread __attribute__((unused));
   unsigned short timeout = 20000;
-  
   
   if ( (ADC1->CR & ADC_CR_ADEN)==0 )
   {
@@ -258,7 +257,11 @@ void adc_get_multiple_values(uint16_t *adr, uint16_t cnt, uint8_t ch)
   ADC1->CFGR1 |= ADC_CFGR1_DMAEN;              // enable DMA
   ADC1->CFGR1 |= ADC_CFGR1_CONT;               // enable continues mode
   
-  ADC1->CFGR1 &= ~ADC_CFGR1_EXTEN;	/* software enabled conversion start */
+  ADC1->CFGR1 &= ~ADC_CFGR1_EXTEN;	// software enabled conversion start 
+  //ADC1->CFGR1 |= ADC_CFGR1_EXTEN_0;     // HW trigger, rising edge
+  //ADC1->CFGR1 |= ADC_CFGR1_EXTEN_1;     // HW trigger, falling edge
+  //ADC1->CFGR1 &= ~ADC_CFGR1_EXTSEL;     // HW trigger input is TRG0 ("000"), which is TRGO2 from TIM1
+  
   ADC1->CHSELR = 1<<ch; 				/* Select channel */
 
   /* configure DMA */
@@ -289,6 +292,6 @@ void adc_get_multiple_values(uint16_t *adr, uint16_t cnt, uint8_t ch)
 
   ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
 
-  delay_micro_seconds(cnt);     // test delay, conversion time is actually lesser than one 1us per sample
+  //delay_micro_seconds(cnt);     // test delay, conversion time is actually lesser than one 1us per sample
 
 }

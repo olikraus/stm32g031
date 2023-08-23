@@ -36,7 +36,7 @@ GCCBINPATH:=/home/kraus/prg/gcc-arm-none-eabi-7-2018-q2-update/bin/
 # Project Information
 
 # The name for the project
-TARGETNAME:=u8g2_test
+TARGETNAME:=motor_test
 
 # The source files of the project
 CSRC:=$(wildcard *.c) 

@@ -47,6 +47,8 @@
   AHB prescaler: RCC->CFGR HPRE --> 000 --> HCLK = 64MHz
   APB prescaler: RCC->CFGR PPRE --> 000 --> PCLK = 64MHz
   
+  TIM1 input will be PLLQ: 128 MHz
+  
 */
 void set_64mhz_sysclk(void)
 {
@@ -122,8 +124,7 @@ void set_64mhz_sysclk(void)
       The ADC Async clock source is selected in RCC->CCIPR and can be
         00: System clock
         01: PLLPCLK
-        10: HSI16       
-      
+        10: HSI16      
       
   */
   
@@ -151,6 +152,9 @@ void set_64mhz_sysclk(void)
   /* wait until the PLL source is active */
   while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_1) 
     ;
+  
+  /* fPLLQ now has 128MHz, so let's use this for TIM1 */
+  RCC->CCIPR |=  RCC_CCIPR_TIM1SEL;
   
   /* recalculate SystemCoreClock variable */
   SystemCoreClockUpdate();  
