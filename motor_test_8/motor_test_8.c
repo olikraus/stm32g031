@@ -332,6 +332,7 @@ int main()
   GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
   
   SysTick->LOAD = 16000*500 - 1;        // Blink with 4 Hz 
+  NVIC_SetPriority( SysTick_IRQn, 3 );  // 3: lowest priority
   SysTick->VAL = 0;
   SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
   
