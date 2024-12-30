@@ -28,9 +28,8 @@
 # The base directory of gcc-arm-none-eabi
 # Can be empty on Ubuntu and installed gcc-arm-none-eabi
 # If set, GCCBINPATH must contain a "/" at the end.
-
-# GCCBINPATH:=/usr/bin/   <<<< Ubuntu version is broken at the moment
-GCCBINPATH:=/home/kraus/prg/gcc-arm-none-eabi-7-2018-q2-update/bin/
+# This might require ARFLAGS=rvU
+GCCBINPATH:=/usr/bin/
 
 #================================================
 # Project Information
@@ -115,6 +114,8 @@ MAP:=-Wl,-Map=$(MAPNAME)
 LFLAGS:=$(COMMON_FLAGS) $(GC) $(MAP)
 #LDLIBS:=--specs=nosys.specs -lc -lc -lnosys -L$(LDSCRIPTDIR) -T $(LDSCRIPT)
 LDLIBS:=--specs=nosys.specs -L$(LDSCRIPTDIR) -T $(LDSCRIPT)
+# the ubuntu version of arm-none-eabi-ar seems to be compiled in deterministic mode which will force timestamp to zero, use undeterministic mode instead (U-modifier)
+ARFLAGS=rvU
 
 # Additional Suffixes
 .SUFFIXES: .elf .hex .bin .dis
@@ -130,7 +131,7 @@ upload: $(DISNAME) $(HEXNAME) $(ELFNAME)
 #	/data/kraus/git/stm32flash-code/stm32flash -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
 #	/data/kraus/git/stm32flash-code/stm32flash -b 57600 -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
 #	/data/kraus/git/stm32flash-code/stm32flash -b 115200 -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
-	/data/kraus/git/stm32flash-code/stm32flash -b 230400 -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
+	/home/kraus/git/stm32flash-code/stm32flash -b 230400 -e 127 -g 0 -w $(HEXNAME) -v /dev/ttyUSB0
 	$(SIZE) $(ELFNAME)
 
 

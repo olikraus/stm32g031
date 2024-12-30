@@ -7,11 +7,11 @@
   
 
   Linux:
-    stty -F /dev/ttyUSB0 sane 115200 && cat /dev/ttyUSB0
-    or stty -F /dev/ttyUSB0 sane 115200 igncr  && cat /dev/ttyUSB0
-    screen /dev/ttyUSB0  115200 (terminate with "C-a k" or "C-a \")
-    minicom -D /dev/ttyUSB0  -b 115200 (terminate with "C-a x", change CR mode: "C-a u", disable HW control flow!)
-    
+    stty -F /dev/ttyUSB0 sane 57600 && cat /dev/ttyUSB0
+    or stty -F /dev/ttyUSB0 sane 57600 igncr  && cat /dev/ttyUSB0
+    screen /dev/ttyUSB0  57600 (terminate with "C-a k" or "C-a \")
+    minicom -D /dev/ttyUSB0  -b 57600 (terminate with "C-a x", change CR mode: "C-a u", disable HW control flow!)
+    picocom /dev/ttyUSB0 --baud 57600 --imap lfcrlf
 
   Ensure that -DUSER_VECT_TAB_ADDRESS is set during compilation, otherwise
   interrupts will not work after the "go" commant of the flashware USART upload.
@@ -90,7 +90,9 @@ int main()
   GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
 
   
-  usart1_init(115200, usart_buf, sizeof(usart_buf));
+  //usart1_init(115200, usart_buf, sizeof(usart_buf));
+  usart1_init(57600, usart_buf, sizeof(usart_buf));
+  
   
   SysTick->LOAD = 2000*500 *16- 1;
   SysTick->VAL = 0;
