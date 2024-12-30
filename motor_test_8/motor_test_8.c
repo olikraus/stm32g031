@@ -338,7 +338,7 @@ int main()
   
   adc_init();
   initDisplay();
-  hardware_init(10);
+  hardware_init(100);
   
   for(;;)
   {
