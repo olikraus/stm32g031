@@ -84,10 +84,10 @@ uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, 
 
 /*
   TIM17: PWM generation
-  Output: PB9 and PA13 via IR_OUT
+  Output: PB9 and PA13 via IR_OUT (both pins, PB9 and PA13 are connected to IR_OUT depending on the direction
   TIM16 must be permanently 1 for IR_OUT
-    IR_OUT = POLARITY ( TIM16_CH1 NAND TIM17_CH1 )
-      --> IR polarity 1, damit das not vom NAND compensiert wird
+    IR_OUT = XOR(IR_POL, NAND(TIM16_CH1, TIM17_CH1))
+      --> set IR_POL polarity 1, to compensate NAND 
       TIM16_CH1 must be permanently high
         --> TIM16 MOE (master output enable) not active
         --> TIM16 OSSI but enable
@@ -98,12 +98,12 @@ uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, 
 #define TIM17_BIT_CNT 11
 #define TIM17_ARR ((1<<(TIM17_BIT_CNT))-1)
 
-void tim17_init(uint16_t hz)
+void hardware_init(uint16_t hz)
 {
   uint16_t prescaler = (SystemCoreClock >> TIM17_BIT_CNT)/(uint32_t)hz;
   
   RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
-  RCC->IOPENR |= RCC_IOPENR_GPIOBEN;		/* Enable clock for GPIO Port A */
+  RCC->IOPENR |= RCC_IOPENR_GPIOBEN;		/* Enable clock for GPIO Port B */
   RCC->APBENR2 |= RCC_APBENR2_TIM1EN;		/* Enable TIM1: Trigger for ADC */
   RCC->APBENR2 |= RCC_APBENR2_TIM16EN;		/* Enable TIM16: Fixed to 1 for TIM17 gate in IR Interface*/
   RCC->APBENR2 |= RCC_APBENR2_TIM17EN;		/* Enable TIM17: PWM Generator for the DC Motor */
@@ -115,7 +115,7 @@ void tim17_init(uint16_t hz)
   
   /* TIM17_CH1 is routed via IR interface */
   /* IR_OUT = POLARITY ( TIM16_CH1 NAND TIM17_CH1 ) --> Polarity is "NOT" to compansate the NAND */
-  SYSCFG->CFGR1 |= SYSCFG_CFGR1_IR_POL;
+  SYSCFG->CFGR1 |= SYSCFG_CFGR1_IR_POL; /* assign 1 to the polarity flag to compensate the NAND */
   
   /* IR mode 0: Use TIM16_CH1 */
   SYSCFG->CFGR1 &= ~SYSCFG_CFGR1_IR_MOD;   
@@ -129,9 +129,9 @@ void tim17_init(uint16_t hz)
   GPIOB->PUPDR &= ~GPIO_PUPDR_PUPD9;	/* no pullup/pulldown */
   GPIOB->BSRR = GPIO_BSRR_BR9;		/* atomic clr */
   GPIOB->AFR[1] &= ~(15 << 4);
-  GPIOB->AFR[1] |= 0 << 4;   // AF0: IR Interface
+  GPIOB->AFR[1] |= 0 << 4;   // AF0: IR Interface IR_OUT
 
-  /*=== PA13 ===*/
+  /*=== PA13: DRV8871 IN2 ===*/
   
   GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
   GPIOA->MODER |= GPIO_MODER_MODE13_1;	/* Alternate Function mode */
@@ -140,7 +140,7 @@ void tim17_init(uint16_t hz)
   GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD13;	/* no pullup/pulldown */
   GPIOA->BSRR = GPIO_BSRR_BR13;		/* atomic clr */
   GPIOA->AFR[1] &= ~(15 << 20);
-  GPIOA->AFR[1] |= 1 << 20;   // AF1: IR Interface
+  GPIOA->AFR[1] |= 1 << 20;   // AF1: IR Interface IR_OUT
 
   /*=== TIM17 ===*/
 
@@ -338,7 +338,7 @@ int main()
   
   adc_init();
   initDisplay();
-  tim17_init(10);
+  hardware_init(10);
   
   for(;;)
   {
