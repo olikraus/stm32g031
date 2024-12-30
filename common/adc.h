@@ -74,6 +74,29 @@ uint16_t adc_get_value(uint8_t ch);
 
 void adc_get_multiple_values(uint16_t *adr, uint16_t cnt, uint8_t ch);
 
+/*
+  read from multiple channels 
+  results are stored in 'adr'
+
+  'channels' must contain a '1' bit for each requested channel
+  ch 0..7 ==  ADC_IN0..7  == PA0..PA7
+  ch 8 == ADC_IN8 == PB0
+  ch 9 == ADC_IN9 == PB1
+  ch 10 == ADC_IN10 == PB2
+  ch 11 == ADC_IN11 == PB7 / PB10
+  ch 12: temperture sensor
+  ch 13: vrefint (1212mV)
+  ch 14: vbat (not available)
+  ch 15 == ADC_IN15 == PB11 / PA11 [PA9]
+  ch 16 == ADC_IN16 == PB12 / PA12 [PA10]
+  ch 17 == ADC_IN17 == PA13
+  ch 18 == ADC_IN18 == PA14 (BOOT0)
+
+  Size of 'adr' must be the number of '1' in 'channels'
+
+*/
+void adc_get_channel_values(uint32_t channels, uint16_t *adr);
+
 
 #endif /* _ADC_H */
 

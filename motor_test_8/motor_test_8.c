@@ -245,6 +245,8 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
   //if ( sr & TIM_SR_UIF )
   //{  
     adc_get_multiple_values(adc_raw_sample_array, ADC_RAW_SAMPLE_CNT, 4);
+  adc_get_channel_values((1<<4) | (1<<13), adc_raw_sample_array);
+
   //}
   TIM17->SR = 0;        // status must be cleared otherwise another IRQ is generated
   
@@ -285,9 +287,9 @@ void drawDisplay(void)
   u8g2_DrawStr(&u8g2, 75,24, u8x8_u16toa(TIM1->CNT, 5));
 
   
-  u8g2_DrawStr(&u8g2, 0,36, "PA4:");
+  u8g2_DrawStr(&u8g2, 0,36, "Array:");
   u8g2_DrawStr(&u8g2, 40,36, u8x8_u16toa(adc_raw_sample_array[0], 4));
-  u8g2_DrawStr(&u8g2, 70,36, u8x8_u16toa(adc_raw_sample_array[1], 4));
+  u8g2_DrawStr(&u8g2, 70,36, u8x8_u16toa((4095UL*1212UL)/adc_raw_sample_array[1], 4));
 
   u8g2_DrawStr(&u8g2, 0,48, "PA4:");
   u8g2_DrawStr(&u8g2, 75,48, u8x8_u16toa(adc_get_value(4), 5));
