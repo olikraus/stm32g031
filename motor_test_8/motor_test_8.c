@@ -79,6 +79,10 @@ TRG7    EXTI11      111
 #include "u8g2.h"
 
 uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr);
+/*===========================================*/
+/* global variables */
+
+
 
 /*===========================================*/
 
@@ -252,10 +256,28 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
   
 }
 
+/*===========================================*/
+
+volatile unsigned long adc_irq_cnt = 0;
+
+
+void adc_enable_interrupt(void)
+{
+  ADC1->ISR |= ADC_ISR_EOS;             /* clear the end of sequence bit */
+  NVIC_SetPriority( ADC1_IRQn, 2);      // 3: lowest priority, 0: highest priority
+  NVIC_EnableIRQ(ADC1_IRQn);
+  ADC1->IER |= ADC_IER_EOCIE;             /* enable end of sequence interrupt */
+} 
+
+void __attribute__ ((interrupt, used)) ADC1_IRQHandler(void)
+{
+  ADC1->ISR |= ADC_ISR_EOS;             /* clear the end of sequence bit */
+  adc_irq_cnt++;
+}
+
 
 /*===========================================*/
 
-u8g2_t u8g2;
 volatile unsigned long SysTickCount = 0;
 
 
@@ -263,13 +285,17 @@ void __attribute__ ((interrupt, used)) SysTick_Handler(void)
 {
   SysTickCount++;  
   
-  if ( SysTickCount & 1 )
-    GPIOA->BSRR = GPIO_BSRR_BS3;		/* atomic set PA3 */
-  else
-    GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
+  // PA3 is the current senser of the dc motor
+  //if ( SysTickCount & 1 )
+  //  GPIOA->BSRR = GPIO_BSRR_BS3;		/* atomic set PA3 */
+  //else
+  //  GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
 }
 
 
+/*===========================================*/
+
+u8g2_t u8g2;
 
 void drawDisplay(void)
 {
@@ -284,8 +310,9 @@ void drawDisplay(void)
   u8g2_DrawStr(&u8g2, 85,12, "MHz");
 
   u8g2_DrawStr(&u8g2, 0,24, "TIM1:");
-  u8g2_DrawStr(&u8g2, 75,24, u8x8_u16toa(TIM1->CNT, 5));
+  u8g2_DrawStr(&u8g2, 30,24, u8x8_u16toa(TIM1->CNT, 5));
 
+  u8g2_DrawStr(&u8g2, 75,24, u8x8_u16toa(adc_irq_cnt, 5));
   
   u8g2_DrawStr(&u8g2, 0,36, "Array:");
   u8g2_DrawStr(&u8g2, 40,36, u8x8_u16toa(adc_raw_sample_array[0], 4));
@@ -326,12 +353,13 @@ int main()
   GPIOA->AFR[0] &= ~(0xf << (3*4));       /* clear alternative function */
   //GPIOA->AFR[0] = 0;       /* clear alternative function */
   
-  GPIOA->MODER &= ~GPIO_MODER_MODE3;	/* clear mode for PA3 */
-  GPIOA->MODER |= GPIO_MODER_MODE3_0;	/* Output mode for PA3 */
-  GPIOA->OTYPER &= ~GPIO_OTYPER_OT3;	/* no Push/Pull for PA3 */
-  GPIOA->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED3;	/* low speed for PA3 */
-  GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD3;	/* no pullup/pulldown for PA3 */
-  GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
+  // TODO: PA3 needs to be configured as analog in for the DC motor
+  //GPIOA->MODER &= ~GPIO_MODER_MODE3;	/* clear mode for PA3 */
+  //GPIOA->MODER |= GPIO_MODER_MODE3_0;	/* Output mode for PA3 */
+  //GPIOA->OTYPER &= ~GPIO_OTYPER_OT3;	/* no Push/Pull for PA3 */
+  //GPIOA->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED3;	/* low speed for PA3 */
+  //GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD3;	/* no pullup/pulldown for PA3 */
+  //GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
   
   SysTick->LOAD = 16000*500 - 1;        // Blink with 4 Hz 
   NVIC_SetPriority( SysTick_IRQn, 3 );  // 3: lowest priority
@@ -339,6 +367,7 @@ int main()
   SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
   
   adc_init();
+  adc_enable_interrupt();
   initDisplay();
   hardware_init(100);
   
