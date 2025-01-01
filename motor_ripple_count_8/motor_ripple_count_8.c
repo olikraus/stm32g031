@@ -85,6 +85,13 @@ uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, 
 /*===========================================*/
 /* global variables */
 
+uint16_t adc_raw_channel_values[3+1] __attribute__ ((aligned (4)));       // Three values: CH 3 (motor current), CH 4 (var pot), CH 13 (vrefint)
+
+#define ADC_ARRAY_DATA_LEN 128
+uint16_t adc_raw_motor_current_array[ADC_ARRAY_DATA_LEN];
+uint16_t adc_raw_motor_current_pos = 0;
+
+uint16_t graph_array[ADC_ARRAY_DATA_LEN];
 
 
 /*===========================================*/
@@ -228,6 +235,13 @@ void hardware_init(uint16_t hz)
                         | TIM_CR1_CEN   // enable counter
                         ;
 
+  TIM3->DIER = 0;
+  //TIM3->DIER |= TIM_DIER_CC1IE;
+  TIM3->DIER |= TIM_DIER_UIE;
+  
+  NVIC_SetPriority(TIM3_IRQn, 1);      // level 0 is highest prio (PM0223)
+  NVIC_EnableIRQ(TIM3_IRQn);
+
 
   /*=== TIM16 ===*/
   
@@ -265,8 +279,6 @@ void tim17_set_duty(uint16_t duty, uint16_t is_backward)
   }
 }
 
-uint16_t adc_raw_channel_values[3+1] __attribute__ ((aligned (4)));       // Three values: CH 3 (motor current), CH 4 (var pot), CH 13 (vrefint)
-
 void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
 {
   uint16_t sr = TIM17->SR;
@@ -294,12 +306,18 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
   Channel 4: IN4: Varpot
   Channel 13: vrefint
 */
-  adc_get_channel_values((1<<3) | (1<<4) | (1<<13), adc_raw_channel_values);
+  //adc_get_channel_values((1<<3) | (1<<4) | (1<<13), adc_raw_channel_values, 1);
   
   TIM17->SR = 0;        // status must be cleared otherwise another IRQ is generated
   
 }
 
+/*===========================================*/
+void __attribute__ ((interrupt, used)) TIM3_IRQHandler(void)
+{
+  adc_get_channel_values((1<<3) | (1<<4) | (1<<13), adc_raw_channel_values, 0);
+  TIM3->SR = 0;
+}
 /*===========================================*/
 
 volatile unsigned long adc_irq_cnt = 0;
@@ -307,15 +325,34 @@ volatile unsigned long adc_irq_cnt = 0;
 
 void adc_enable_interrupt(void)
 {
+  /* setup operation */
+  //adc_get_channel_values((1<<3) | (1<<4) | (1<<13), adc_raw_channel_values, 1);
+   
+  /* trigger by TIM3 --> probably DMA circular mode is required */
+  //ADC1->CFGR1 |= ADC_CFGR1_EXTEN_0;     // rising edge for TIM3 TRGO
+  //ADC1->CFGR1 &= ~ADC_CFGR1_EXTSEL;     // clear ext sel bits
+  //ADC1->CFGR1 |= ADC_CFGR1_EXTSEL_0 | ADC_CFGR1_EXTSEL_1;               // select TIM3 TRGO
+
+  /* ADC interrupt configuration */
   ADC1->ISR |= ADC_ISR_EOS;             /* clear the end of sequence bit */
   NVIC_SetPriority( ADC1_IRQn, 2);      // 3: lowest priority, 0: highest priority
   NVIC_EnableIRQ(ADC1_IRQn);
   ADC1->IER |= ADC_IER_EOCIE;             /* enable end of sequence interrupt */
+  
+    
 } 
 
 void __attribute__ ((interrupt, used)) ADC1_IRQHandler(void)
 {
   ADC1->ISR |= ADC_ISR_EOS;             /* clear the end of sequence bit */
+  
+  adc_raw_motor_current_array[adc_raw_motor_current_pos++] = adc_raw_channel_values[0];
+  if ( adc_raw_motor_current_pos >= ADC_ARRAY_DATA_LEN )
+  {
+    adc_raw_motor_current_pos = 0;
+    memcpy(graph_array, adc_raw_motor_current_array, ADC_ARRAY_DATA_LEN*sizeof(uint16_t));
+  }
+    
   adc_irq_cnt++;
 }
 
@@ -343,38 +380,53 @@ u8g2_t u8g2;
 
 void drawDisplay(void)
 {
+  uint16_t v;
+  uint16_t i;
   uint16_t motor_current = adc_raw_channel_values[0]; // PA3, IN3 
   uint16_t varpot = adc_raw_channel_values[1]; // PA4, IN4 
   uint16_t refint = adc_raw_channel_values[2];  // bandgap reference 1212mV
   uint16_t supply = (4095UL*1212UL)/refint;
 
 
-  u8g2_SetFont(&u8g2, u8g2_font_6x12_tf);
+  //u8g2_SetFont(&u8g2, u8g2_font_6x12_tf);
+  u8g2_SetFont(&u8g2, u8g2_font_5x7_tr);
   u8g2_ClearBuffer(&u8g2);
-  u8g2_DrawStr(&u8g2, 0,12, "STM32G031");
-  u8g2_DrawStr(&u8g2, 70,12, u8x8_u8toa(SystemCoreClock/1000000, 2));
-  u8g2_DrawStr(&u8g2, 85,12, "MHz");
-
-  u8g2_DrawStr(&u8g2, 0,24, "TIM3:");
-  u8g2_DrawStr(&u8g2, 30,24, u8x8_u16toa(TIM3->CNT, 5));
-
-  u8g2_DrawStr(&u8g2, 75,24, u8x8_u16toa(adc_irq_cnt, 5));
+  //u8g2_DrawStr(&u8g2, 0,12, "STM32G031");
+  //u8g2_DrawStr(&u8g2, 70,12, u8x8_u8toa(SystemCoreClock/1000000, 2));
+  //u8g2_DrawStr(&u8g2, 85,12, "MHz");
   
-  u8g2_DrawStr(&u8g2, 0,36, "Motor:");
-  u8g2_DrawStr(&u8g2, 75,36, u8x8_u16toa(motor_current, 4));
-  //u8g2_DrawStr(&u8g2, 60,36, u8x8_u16toa(adc_raw_channel_values[1], 4));
-  //u8g2_DrawStr(&u8g2, 90,36, u8x8_u16toa((4095UL*1212UL)/adc_raw_channel_values[2], 4));
+  u8g2_DrawStr(&u8g2, 0,8, "mV");
+  u8g2_DrawStr(&u8g2, 25,8, "Pot");
+  u8g2_DrawStr(&u8g2, 50,8, "Duty");
+  u8g2_DrawStr(&u8g2, 75,8, "Current");
 
-  u8g2_DrawStr(&u8g2, 0,48, "VarPot:");
-  u8g2_DrawStr(&u8g2, 50,48, u8x8_u16toa(varpot, 4));
-  u8g2_DrawStr(&u8g2, 80,48, u8x8_u16toa(TIM17->CCR1, 4));
-
+  u8g2_DrawStr(&u8g2, 0,16, u8x8_u16toa(supply, 4));
+  u8g2_DrawStr(&u8g2, 25,16, u8x8_u16toa(varpot, 4));
+  u8g2_DrawStr(&u8g2, 50,16, u8x8_u16toa(TIM17->CCR1, 4));
+  u8g2_DrawStr(&u8g2, 75,16, u8x8_u16toa(motor_current, 4));
 
   
-  u8g2_DrawStr(&u8g2, 0,60, "Supply (mV):");
-  u8g2_DrawStr(&u8g2, 75,60, u8x8_u16toa(supply, 4));
+  //u8g2_DrawStr(&u8g2, 0,34, "TIM3:");
+  //u8g2_DrawStr(&u8g2, 30,34, u8x8_u16toa(TIM3->CNT, 5));
+  //u8g2_DrawStr(&u8g2, 75,34, u8x8_u16toa(adc_irq_cnt, 5));
   
+  //u8g2_DrawStr(&u8g2, 0,36, "Motor:");
+  //u8g2_DrawStr(&u8g2, 75,36, u8x8_u16toa(motor_current, 4));
+  //u8g2_DrawStr(&u8g2, 0,48, "VarPot:");
+  //u8g2_DrawStr(&u8g2, 50,48, u8x8_u16toa(varpot, 4));
+  //u8g2_DrawStr(&u8g2, 80,48, u8x8_u16toa(TIM17->CCR1, 4));
+  //u8g2_DrawStr(&u8g2, 0,60, "Supply (mV):");
+  //u8g2_DrawStr(&u8g2, 75,60, u8x8_u16toa(supply, 4));
   
+  for( i = 0; i <  ADC_ARRAY_DATA_LEN; i++ )
+  {
+    v = graph_array[i];
+    if ( v > 40 )
+      v = 40;
+    //u8g2_DrawPixel( &u8g2, i, 63 - (graph_array[i] >> 7) );
+    //u8g2_DrawPixel( &u8g2, i, 63 - (graph_array[i] >> 4) );
+    u8g2_DrawPixel( &u8g2, i, 63 - v );
+  }
   
   u8g2_SendBuffer(&u8g2);
 }

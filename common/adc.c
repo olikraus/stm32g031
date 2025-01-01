@@ -172,8 +172,8 @@ void adc_init(void)
   /* 
     12.5 clk sampling time + 12.5 conversion time for 12 bit --> 25 adc clocks @ 32MHz --> 0.78us --> 1.282.051 samples per second
   */
-  ADC1->SMPR |= ADC_SMPR_SMP1_0 | ADC_SMPR_SMP1_1;
-  ADC1->SMPR |= ADC_SMPR_SMP2_0 | ADC_SMPR_SMP2_1;
+  //ADC1->SMPR |= ADC_SMPR_SMP1_0 | ADC_SMPR_SMP1_1;
+  ADC1->SMPR |= ADC_SMPR_SMP2_0 | ADC_SMPR_SMP2_2;
   
   
   /* ADC result configuration */
@@ -339,7 +339,7 @@ void adc_get_multiple_values(uint16_t *adr, uint16_t cnt, uint8_t ch)
   Size of 'adr' must be the number of '1' in 'channels'
 
 */
-void adc_get_channel_values(uint32_t channels, uint16_t *adr)
+void adc_get_channel_values(uint32_t channels, uint16_t *adr, int wait_for_result)
 {
   uint32_t dummyread __attribute__((unused));
   uint32_t c;
@@ -419,13 +419,15 @@ void adc_get_channel_values(uint32_t channels, uint16_t *adr)
 
   ADC1->ISR |= ADC_ISR_EOS;             /* clear the end of sequence bit */
   ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
-  while ((ADC1->ISR & ADC_ISR_EOS) == 0) /* wait end of sequence conversion */
+  if ( wait_for_result )
   {
-    if ( timeout == 0 )
-      return 0;
-    timeout--;
+    while ((ADC1->ISR & ADC_ISR_EOS) == 0) /* wait end of sequence conversion */
+    {
+      if ( timeout == 0 )
+        return 0;
+      timeout--;
+    }
   }
-  
   
 }
 

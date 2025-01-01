@@ -95,7 +95,7 @@ void adc_get_multiple_values(uint16_t *adr, uint16_t cnt, uint8_t ch);
   Size of 'adr' must be the number of '1' in 'channels'
 
 */
-void adc_get_channel_values(uint32_t channels, uint16_t *adr);
+void adc_get_channel_values(uint32_t channels, uint16_t *adr, int wait_for_result);
 
 
 #endif /* _ADC_H */
