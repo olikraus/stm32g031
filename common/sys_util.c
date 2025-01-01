@@ -48,6 +48,7 @@
   APB prescaler: RCC->CFGR PPRE --> 000 --> PCLK = 64MHz
   
   TIM1 input will be PLLQ: 128 MHz
+  All other timers will have CK_INT = 64 MHz
   
 */
 void set_64mhz_sysclk(void)

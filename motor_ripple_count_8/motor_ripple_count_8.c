@@ -105,13 +105,16 @@ uint8_t u8x8_gpio_and_delay_stm32g0(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, 
 #define TIM17_BIT_CNT 11
 #define TIM17_ARR ((1<<(TIM17_BIT_CNT))-1)
 
+// argument is ignored: TODO remove hz argument
 void hardware_init(uint16_t hz)
 {
   uint16_t prescaler = (SystemCoreClock >> TIM17_BIT_CNT)/(uint32_t)hz;
   
   RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
   RCC->IOPENR |= RCC_IOPENR_GPIOBEN;		/* Enable clock for GPIO Port B */
-  RCC->APBENR2 |= RCC_APBENR2_TIM1EN;		/* Enable TIM1: Trigger for ADC */
+  RCC->APBENR2 |= RCC_APBENR2_TIM1EN;		/* Enable TIM1: Trigger for ADC (OBSOLETE) */
+  RCC->APBENR1 |= RCC_APBENR1_TIM3EN;            /* Enable TIM3: Trigger for ADC */
+  
   RCC->APBENR2 |= RCC_APBENR2_TIM16EN;		/* Enable TIM16: Fixed to 1 for TIM17 gate in IR Interface*/
   RCC->APBENR2 |= RCC_APBENR2_TIM17EN;		/* Enable TIM17: PWM Generator for the DC Motor */
   RCC->APBENR2 |= RCC_APBENR2_SYSCFGEN;		/* Enable SysCfg  */
@@ -150,6 +153,7 @@ void hardware_init(uint16_t hz)
   GPIOA->AFR[1] |= 1 << 20;   // AF1: IR Interface IR_OUT
 
   /*=== TIM17 ===*/
+  /* CK_INT = 64 MHz */
 
   /* configuration for PWM */
   TIM17->CR1 = 0;               // all default values
@@ -161,7 +165,8 @@ void hardware_init(uint16_t hz)
                             ;
         
   /* prescaler */
-  TIM17->PSC = prescaler-1;
+  //TIM17->PSC = prescaler-1;
+  TIM17->PSC = 0;
   /* auto reload register */
   TIM17->ARR = TIM17_ARR;
   /* Compare Register */
@@ -182,6 +187,8 @@ void hardware_init(uint16_t hz)
 
 
   /*=== TIM1 ===*/
+  /* OBSOLETE */
+  /* TIM1 input will be PLLQ: 128 MHz */
   /* TIM1 will be triggered by TIM17 to generate the ADC start event (which can't be done by TIM17 */
   
   /* use default values for control reg. (up counting) */
@@ -205,6 +212,21 @@ void hardware_init(uint16_t hz)
   
   //TIM1->CR1 |= TIM_CR1_CEN;             // enable TIM1: not required, will by done by trigger event
   
+  
+  /*=== TIM3 ===*/
+  /* CK_INT = 64 MHz */
+  /* TIM3 will be used to trigger ADC conversion */
+  TIM3->CR1 = 0;
+  TIM3->CR2 = 0;                // Reset event set to TRGO2 (for ADC)
+  TIM3->SMCR  = 0;
+  TIM3->PSC = 63;               // CK_INT is 64MHz, divide by 64 to get a 1MHz clock
+  #define TIM3_FREQ 2000
+  TIM3->ARR = 1000000UL / TIM3_FREQ;            // assign the desired frequency, ARR value is 500 for FREQ=2000;
+  
+  /* CR1 configuration */
+  TIM3->CR1 = TIM_CR1_ARPE  // buffered output for ARR register
+                        | TIM_CR1_CEN   // enable counter
+                        ;
 
 
   /*=== TIM16 ===*/
@@ -248,8 +270,6 @@ uint16_t adc_raw_channel_values[3+1] __attribute__ ((aligned (4)));       // Thr
 void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
 {
   uint16_t sr = TIM17->SR;
-  //if ( sr & TIM_SR_UIF )
-  //{  
 /*
   read from multiple channels 
   results are stored in 'adr'
@@ -275,8 +295,7 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
   Channel 13: vrefint
 */
   adc_get_channel_values((1<<3) | (1<<4) | (1<<13), adc_raw_channel_values);
-
-  //}
+  
   TIM17->SR = 0;        // status must be cleared otherwise another IRQ is generated
   
 }
@@ -336,8 +355,8 @@ void drawDisplay(void)
   u8g2_DrawStr(&u8g2, 70,12, u8x8_u8toa(SystemCoreClock/1000000, 2));
   u8g2_DrawStr(&u8g2, 85,12, "MHz");
 
-  u8g2_DrawStr(&u8g2, 0,24, "TIM1:");
-  u8g2_DrawStr(&u8g2, 30,24, u8x8_u16toa(TIM1->CNT, 5));
+  u8g2_DrawStr(&u8g2, 0,24, "TIM3:");
+  u8g2_DrawStr(&u8g2, 30,24, u8x8_u16toa(TIM3->CNT, 5));
 
   u8g2_DrawStr(&u8g2, 75,24, u8x8_u16toa(adc_irq_cnt, 5));
   
@@ -347,7 +366,9 @@ void drawDisplay(void)
   //u8g2_DrawStr(&u8g2, 90,36, u8x8_u16toa((4095UL*1212UL)/adc_raw_channel_values[2], 4));
 
   u8g2_DrawStr(&u8g2, 0,48, "VarPot:");
-  u8g2_DrawStr(&u8g2, 75,48, u8x8_u16toa(varpot, 4));
+  u8g2_DrawStr(&u8g2, 50,48, u8x8_u16toa(varpot, 4));
+  u8g2_DrawStr(&u8g2, 80,48, u8x8_u16toa(TIM17->CCR1, 4));
+
 
   
   u8g2_DrawStr(&u8g2, 0,60, "Supply (mV):");
