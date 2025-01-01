@@ -1,8 +1,8 @@
 /* 
 
-  DC motor test with the STM32G031
+  DC motor ripple count with the STM32G031
 
-  Copyright (c) 2023, olikraus@gmail.com
+  Copyright (c) 2025, olikraus@gmail.com
   All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
@@ -69,6 +69,9 @@ TRG4    TIM15_TRGO  100
 TRG5    TIM6_TRGO   101
 TRG6    TIM4_TRGO   110
 TRG7    EXTI11      111
+
+  Ripple Count:   https://www.ti.com/lit/ug/tidud30a/tidud30a.pdf
+  
 
 */
 
@@ -240,16 +243,38 @@ void tim17_set_duty(uint16_t duty, uint16_t is_backward)
   }
 }
 
-#define ADC_RAW_SAMPLE_CNT 2
-uint16_t adc_raw_sample_array[ADC_RAW_SAMPLE_CNT+100] __attribute__ ((aligned (4)));
+uint16_t adc_raw_channel_values[3+1] __attribute__ ((aligned (4)));       // Three values: CH 3 (motor current), CH 4 (var pot), CH 13 (vrefint)
 
 void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
 {
   uint16_t sr = TIM17->SR;
   //if ( sr & TIM_SR_UIF )
   //{  
-    adc_get_multiple_values(adc_raw_sample_array, ADC_RAW_SAMPLE_CNT, 4);
-  adc_get_channel_values((1<<4) | (1<<13), adc_raw_sample_array);
+/*
+  read from multiple channels 
+  results are stored in 'adr'
+
+  'channels' must contain a '1' bit for each requested channel
+  ch 0..7 ==  ADC_IN0..7  == PA0..PA7
+  ch 8 == ADC_IN8 == PB0
+  ch 9 == ADC_IN9 == PB1
+  ch 10 == ADC_IN10 == PB2
+  ch 11 == ADC_IN11 == PB7 / PB10
+  ch 12: temperture sensor
+  ch 13: vrefint (1212mV)
+  ch 14: vbat (not available)
+  ch 15 == ADC_IN15 == PB11 / PA11 [PA9]
+  ch 16 == ADC_IN16 == PB12 / PA12 [PA10]
+  ch 17 == ADC_IN17 == PA13
+  ch 18 == ADC_IN18 == PA14 (BOOT0)
+
+  Size of 'adr' must be the number of '1' in 'channels'
+
+  Channel 3: IN3 Motor current
+  Channel 4: IN4: Varpot
+  Channel 13: vrefint
+*/
+  adc_get_channel_values((1<<3) | (1<<4) | (1<<13), adc_raw_channel_values);
 
   //}
   TIM17->SR = 0;        // status must be cleared otherwise another IRQ is generated
@@ -299,7 +324,9 @@ u8g2_t u8g2;
 
 void drawDisplay(void)
 {
-  uint16_t refint = adc_get_value(13);  // bandgap reference 1212mV
+  uint16_t motor_current = adc_raw_channel_values[0]; // PA3, IN3 
+  uint16_t varpot = adc_raw_channel_values[1]; // PA4, IN4 
+  uint16_t refint = adc_raw_channel_values[2];  // bandgap reference 1212mV
   uint16_t supply = (4095UL*1212UL)/refint;
 
 
@@ -314,18 +341,15 @@ void drawDisplay(void)
 
   u8g2_DrawStr(&u8g2, 75,24, u8x8_u16toa(adc_irq_cnt, 5));
   
-  u8g2_DrawStr(&u8g2, 0,36, "Array:");
-  u8g2_DrawStr(&u8g2, 40,36, u8x8_u16toa(adc_raw_sample_array[0], 4));
-  u8g2_DrawStr(&u8g2, 70,36, u8x8_u16toa((4095UL*1212UL)/adc_raw_sample_array[1], 4));
+  u8g2_DrawStr(&u8g2, 0,36, "Motor:");
+  u8g2_DrawStr(&u8g2, 75,36, u8x8_u16toa(motor_current, 4));
+  //u8g2_DrawStr(&u8g2, 60,36, u8x8_u16toa(adc_raw_channel_values[1], 4));
+  //u8g2_DrawStr(&u8g2, 90,36, u8x8_u16toa((4095UL*1212UL)/adc_raw_channel_values[2], 4));
 
-  u8g2_DrawStr(&u8g2, 0,48, "PA4:");
-  u8g2_DrawStr(&u8g2, 75,48, u8x8_u16toa(adc_get_value(4), 5));
+  u8g2_DrawStr(&u8g2, 0,48, "VarPot:");
+  u8g2_DrawStr(&u8g2, 75,48, u8x8_u16toa(varpot, 4));
 
   
-  //u8g2_DrawStr(&u8g2, 0,36, "SysTick:");
-  //u8g2_DrawStr(&u8g2, 75,36, u8x8_u16toa(SysTickCount, 5));
-
-
   u8g2_DrawStr(&u8g2, 0,60, "Supply (mV):");
   u8g2_DrawStr(&u8g2, 75,60, u8x8_u16toa(supply, 4));
   
@@ -367,7 +391,7 @@ int main()
   SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
   
   adc_init();
-  //adc_enable_interrupt();
+  adc_enable_interrupt();
   initDisplay();
   hardware_init(100);
   
@@ -376,7 +400,7 @@ int main()
 
     drawDisplay();
     
-    uint16_t adc = adc_get_value(4);  // 12 Bit
+    uint16_t adc = adc_raw_channel_values[1]; // varpot at PA4, IN4, 12 bit
     uint16_t inv = adc >= (1<<11)?1:0;
     if ( inv )
       adc = adc - (1<<11);
