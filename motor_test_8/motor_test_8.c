@@ -109,6 +109,32 @@ volatile uint32_t *update_adc_ticks_address = NULL;     // the addres of the glo
 volatile uint32_t tim17_peroidic_ticks = 0;                     // number of ticks between calls to TIM17 irq (5000Hz --> 12200 ticks)
 volatile uint32_t tim17_peroidic_ticks_start = 0;               // start value for calculation of tim17_peroidic_ticks
 
+/* the below tim17 state machine has mutliple substate machines, the follow variable will request one of them */
+
+#define TIM17_REQ_NONE 0
+#define TIM17_REQ_DRIVE 1
+#define TIM17_REQ_IS_TRANSITION 2               // train between track section?
+#define TIM17_REQ_IS_OCCUPIED 3                 // track section occopied by train?
+volatile uint16_t tim17_req = TIM17_REQ_NONE;
+
+/* defines for the TIM17 irq handler state machine */
+#define TIM17_IRQ_STATE_IDLE 0
+
+/* forward/backward drive */
+#define TIM17_IRQ_STATE_DRIVE_START_ADC 10
+#define TIM17_IRQ_STATE_DRIVE_WAIT_ADC 11
+#define TIM17_IRQ_STATE_DRIVE_ANALYSIS_1         12
+#define TIM17_IRQ_STATE_DRIVE_ANALYSIS_2         13
+#define TIM17_IRQ_STATE_DRIVE_ANALYSIS_3         14
+#define TIM17_IRQ_STATE_DRIVE_GET_SUPPLY                15
+#define TIM17_IRQ_STATE_DRIVE_GET_VARPOT               16
+
+
+volatile uint16_t tim17_irq_state = TIM17_IRQ_STATE_IDLE;       // state variable for tim17 irq handler
+volatile uint16_t tim17_irq_cnt = 0;                                    // just a counter how often tim17 irq handler is called
+
+volatile uint16_t tim17_drive_current = 0;                              // 
+
 /*===========================================*/
 /* Utility Procedures */
 
@@ -136,6 +162,61 @@ uint32_t getProcessorClockDelta(uint32_t start_value)
 
 /*===========================================*/
 
+void adc_local_init()
+{
+  /* configure adc */
+
+  ADC1->CFGR1 &= ~ADC_CFGR1_DMACFG;              // disable DMA circular mode --> one shot mode
+  ADC1->CFGR1 |= ADC_CFGR1_DMAEN;              // enable DMA
+  ADC1->CFGR1 |= ADC_CFGR1_CONT;               // enable continues mode (because we need to read 'cnt' values
+  
+  ADC1->CFGR1 &= ~ADC_CFGR1_EXTEN;	// software enabled conversion start 
+  //ADC1->CFGR1 |= ADC_CFGR1_EXTEN_0;     // HW trigger, rising edge
+  //ADC1->CFGR1 |= ADC_CFGR1_EXTEN_1;     // HW trigger, falling edge
+  //ADC1->CFGR1 &= ~ADC_CFGR1_EXTSEL;     // HW trigger input is TRG0 ("000"), which is TRGO2 from TIM1
+
+  ADC1->SMPR &= ~ADC_SMPR_SMP1;
+  ADC1->SMPR &= ~ADC_SMPR_SMP2;
+  /*
+    000: 1.5 ADC clock cycles
+    001: 3.5 ADC clock cycles
+    010: 7.5 ADC clock cycles
+    011: 12.5 ADC clock cycles
+    100: 19.5 ADC clock cycles
+    101: 39.5 ADC clock cycles
+    110: 79.5 ADC clock cycles
+    111: 160.5 ADC clock cycles
+  */
+  /* sampling time needs to be at least 12.5 ADC clock cycles for good results if the channels are changing */
+  /* minimal sampling time for both sampling values */  
+  /* 
+    12.5 clk sampling time + 12.5 conversion time for 12 bit --> 25 adc clocks @ 32MHz --> 0.78us --> 1.282.051 samples per second
+    
+    For multiple values, the max possible frequence for the array update would be:
+      32000000 / ( ADCTicks * cnt )
+      
+    Becasue ADC uses half system clock, the number of system ticks is
+      ADCTicks * cnt * 2
+      
+  */
+  ADC1->SMPR |= ADC_SMPR_SMP1_0 | ADC_SMPR_SMP1_2;              // 39.5 ADC clock cycles --> 52 ticks  --> 32000000 Hz / (52*128) --> 4807 Hz
+  ADC1->SMPR |= ADC_SMPR_SMP2_0 | ADC_SMPR_SMP2_2;
+
+
+  /* 
+    Configure DMAMUX1 for ADC
+  
+    DMA MUX channel 0 connected to DMA channel 1!
+    
+    see code comment here:
+    https://vivonomicon.com/2019/07/05/bare-metal-stm32-programming-part-9-dma-megamix/
+    --> mux channel0 connects to dma1
+  */
+  // DMAMUX1_Channel0->CCR = 0;
+  DMAMUX1_Channel0->CCR =  5<<DMAMUX_CxCR_DMAREQ_ID_Pos;   /* 5=ADC */
+}
+
+
 /*
   TIM17: PWM generation
   Output: PB9 and PA13 via IR_OUT (both pins, PB9 and PA13 are connected to IR_OUT depending on the direction
@@ -155,6 +236,9 @@ uint32_t getProcessorClockDelta(uint32_t start_value)
 void hardware_init(uint16_t hz)
 {
   uint16_t prescaler = (SystemCoreClock >> TIM17_BIT_CNT)/(uint32_t)hz;
+  
+  adc_init();           /* call the common procedure to do a generic adc init and calibration */
+  adc_local_init();
   
   RCC->IOPENR |= RCC_IOPENR_GPIOAEN;		/* Enable clock for GPIO Port A */
   RCC->IOPENR |= RCC_IOPENR_GPIOBEN;		/* Enable clock for GPIO Port B */
@@ -270,6 +354,62 @@ void hardware_init(uint16_t hz)
   TIM16->CCMR1 = 5<<TIM_CCMR1_OC1M_Pos;        // force high
 }
 
+
+
+
+/*
+  read multiple ADC values
+*/
+void adc_get_values_with_dma(volatile uint16_t *adr, uint16_t cnt, uint8_t ch)
+{
+  
+  /* check for ongoing conversion */
+  
+  if ( ADC1->CR & ADC_CR_ADSTART )  // is any conversion ongoing?
+  {
+    ADC1->CR |= ADC_CR_ADSTP;   // if so, then stop the conversion
+    while( ADC1->CR & ADC_CR_ADSTP )      // wait until stop is executed
+        ;
+  }
+  
+  /* DMA config inside ADC1 */
+  
+  ADC1->CFGR1 &= ~ADC_CFGR1_DMACFG;              // disable DMA circular mode --> one shot mode
+  ADC1->CFGR1 |= ADC_CFGR1_DMAEN | ADC_CFGR1_CONT;              // enable DMA, enable continues mode (because we need to read 'cnt' values
+  
+  /* Select requested channel */
+  
+  ADC1->CHSELR = 1<<ch; 				
+
+  /* configure DMA, DMAMUX is already configured */
+  
+  DMA1_Channel1->CCR = 0;       // clear DMA channel register
+  
+  DMA1_Channel1->CNDTR = cnt;                                        /* buffer size, number of ADC scans --> array length */
+  DMA1_Channel1->CPAR = (uint32_t)&(ADC1->DR);                     /* source value */
+  DMA1_Channel1->CMAR = (uint32_t)adr;                   /* destination memory */
+  DMA1_Channel1->CCR |= DMA_CCR_PL		/* highest prio */   
+                                        | DMA_CCR_TCIE                /* enable DMA and DMA completion IRQ */
+                                        | DMA_CCR_MINC		/* increment memory */   
+                                        | DMA_CCR_MSIZE_0		/* 01: 16 Bit access */   
+                                        | DMA_CCR_PSIZE_0		/* 01: 16 Bit access */   
+                                        | DMA_CCR_EN;                   /* enable DMA */
+
+
+  ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
+
+  //delay_micro_seconds(cnt);     // test delay, conversion time is actually lesser than one 1us per sample
+}
+
+
+/*===========================================*/
+
+
+
+
+
+
+
 /*
   duty:
     0 .. (1<<TIM17_BIT_CNT)-1
@@ -281,7 +421,59 @@ void hardware_init(uint16_t hz)
   1         0         H           L                   Forward (Current OUT1 → OUT2)
   1         1         L           L                    Brake; low-side slow decay
 
+The GPIO Mode register has two bits:
+  00: Input mode
+  01: General purpose output mode
+  10: Alternate function mode
+  11: Analog mode (reset state)
+  
+  Code below will switch between output mode (constant 0 or 1) and alternate function mode (TIM17 PWM)
+
 */
+
+void tim17_motor_coast(void)
+{
+    GPIOB->MODER &= ~GPIO_MODER_MODE9;	/* clear mode */
+    GPIOB->MODER |= GPIO_MODER_MODE9_0;	/* output mode */    
+    GPIOB->BSRR = GPIO_BSRR_BR9;                      /* clear bit */
+  
+    GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
+    GPIOA->MODER |= GPIO_MODER_MODE13_0;	/* output mode */
+    GPIOA->BSRR = GPIO_BSRR_BR13;                    /* clear bit */
+}
+
+void tim17_motor_break(void)
+{
+    GPIOB->MODER &= ~GPIO_MODER_MODE9;	/* clear mode */
+    GPIOB->MODER |= GPIO_MODER_MODE9_0;	/* output mode */    
+    GPIOB->BSRR = GPIO_BSRR_BS9;                      /* clear bit */
+  
+    GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
+    GPIOA->MODER |= GPIO_MODER_MODE13_0;	/* output mode */
+    GPIOA->BSRR = GPIO_BSRR_BS13;                    /* clear bit */
+}
+
+void tim17_motor_backward(void)
+{
+    GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
+    GPIOA->MODER |= GPIO_MODER_MODE13_1;	/* Alternate Function mode */
+    
+    GPIOB->MODER &= ~GPIO_MODER_MODE9;	/* clear mode */
+    GPIOB->MODER |= GPIO_MODER_MODE9_0;	/* output mode */    
+    GPIOB->BSRR = GPIO_BSRR_BS9;
+}
+
+void tim17_motor_forward(void)
+{
+    GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
+    GPIOA->MODER |= GPIO_MODER_MODE13_0;	/* output mode */
+    GPIOA->BSRR = GPIO_BSRR_BS13;
+    
+    GPIOB->MODER &= ~GPIO_MODER_MODE9;	/* clear mode */
+    GPIOB->MODER |= GPIO_MODER_MODE9_1;	/* Alternate Function mode */
+}
+
+
 void tim17_set_duty(uint16_t duty, uint16_t is_backward)
 {
   TIM17->CCR1 = ((1<<TIM17_BIT_CNT)-1) - duty;
@@ -294,23 +486,13 @@ void tim17_set_duty(uint16_t duty, uint16_t is_backward)
   */
   if ( is_backward )
   {
-    GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
-    GPIOA->MODER |= GPIO_MODER_MODE13_1;	/* Alternate Function mode */
-    
-    GPIOB->MODER &= ~GPIO_MODER_MODE9;	/* clear mode */
-    GPIOB->MODER |= GPIO_MODER_MODE9_0;	/* output mode */    
-    GPIOB->BSRR = GPIO_BSRR_BS9;
-
+    tim17_motor_backward();
   }
   else
   {
-    GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
-    GPIOA->MODER |= GPIO_MODER_MODE13_0;	/* output mode */
-    
-    GPIOB->MODER &= ~GPIO_MODER_MODE9;	/* clear mode */
-    GPIOB->MODER |= GPIO_MODER_MODE9_1;	/* Alternate Function mode */
-    GPIOA->BSRR = GPIO_BSRR_BS13;
+    tim17_motor_forward();
   }
+  tim17_req = TIM17_REQ_DRIVE;
 }
 
 /*===========================================*/
@@ -319,81 +501,110 @@ void tim17_set_duty(uint16_t duty, uint16_t is_backward)
 uint16_t adc_raw_sample_array[ADC_RAW_SAMPLE_CNT] __attribute__ ((aligned (4)));
 uint16_t adc_copy_sample_array[ADC_RAW_SAMPLE_CNT] __attribute__ ((aligned (4)));
 
-#define IRQ_STATE_START_MOTOR_ADC 0
-#define IRQ_STATE_WAIT_MOTOR_ADC 1
-#define IRQ_STATE_ANALYSIS_1 2
-#define IRQ_STATE_ANALYSIS_2 3
-#define IRQ_STATE_ANALYSIS_3 4
-#define IRQ_STATE_SUPPLY 5
-#define IRQ_STATE_VARPOT 6
 
-
-uint16_t tim17_irq_state = IRQ_STATE_START_MOTOR_ADC;
-uint16_t tim17_irq_cnt = 0;
 uint16_t dma_busy_cnt = 0;
 uint16_t varpot_skip_cnt = 0;
+uint16_t varpot_skip_total = 200;
+
+
+void tim17_handle_request(void)
+{
+  switch(tim17_req)
+  {
+    case TIM17_REQ_DRIVE:
+      tim17_irq_state = TIM17_IRQ_STATE_DRIVE_START_ADC;
+      break;
+    case TIM17_REQ_IS_TRANSITION:
+      break;
+    case TIM17_REQ_IS_OCCUPIED:
+      break;
+  }
+}
+
 
 void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
 {
+  uint32_t sum;
+  uint16_t i; 
   tim17_peroidic_ticks = getProcessorClockDelta(tim17_peroidic_ticks_start);
   tim17_peroidic_ticks_start = SysTick->VAL;
   ++tim17_irq_cnt;
 
   switch( tim17_irq_state )
   {
-    case IRQ_STATE_START_MOTOR_ADC:
-      adc_get_multiple_values(adc_raw_sample_array, ADC_RAW_SAMPLE_CNT, 3);               // this will just start the sampling process
+    case TIM17_IRQ_STATE_IDLE:
+        if ( varpot_skip_cnt == 0 )
+        {
+          adc_get_values_with_dma(&varpot, 1, 4);               // read var pot value
+          update_adc_ticks_start = SysTick->VAL;
+          update_adc_ticks_address = &adc_varpot_ticks;
+          varpot_skip_cnt = varpot_skip_total;
+        }
+        else
+        {
+          varpot_skip_cnt--;
+        }
+        /* stay in IDLE state */
+        tim17_handle_request();           // override and jump to a different sub state machine if required
+        break;
+    case TIM17_IRQ_STATE_DRIVE_START_ADC:
+      adc_get_values_with_dma(adc_raw_sample_array, ADC_RAW_SAMPLE_CNT, 3);               // this will just start the sampling process
       update_adc_ticks_start = SysTick->VAL;
       update_adc_ticks_address = &adc_motor_ticks; 
       dma_busy_cnt = 0;
-      tim17_irq_state = IRQ_STATE_WAIT_MOTOR_ADC;
+      tim17_irq_state = TIM17_IRQ_STATE_DRIVE_WAIT_ADC;
       break;
-    case IRQ_STATE_WAIT_MOTOR_ADC:
+    case TIM17_IRQ_STATE_DRIVE_WAIT_ADC:
       if ( DMA1_Channel1->CNDTR == 0 )
       {
         memcpy(adc_copy_sample_array, adc_raw_sample_array, ADC_RAW_SAMPLE_CNT*sizeof(uint16_t));
-        tim17_irq_state = IRQ_STATE_ANALYSIS_1;
+        tim17_irq_state = TIM17_IRQ_STATE_DRIVE_ANALYSIS_1;
       }
       else
       {
         dma_busy_cnt++;
         if ( dma_busy_cnt > 16 )
         {
-          tim17_irq_state = IRQ_STATE_SUPPLY;
+          tim17_irq_state = TIM17_IRQ_STATE_DRIVE_GET_SUPPLY;
         }
       }
       break;
-    case IRQ_STATE_ANALYSIS_1:
-      tim17_irq_state = IRQ_STATE_ANALYSIS_2;
+    case TIM17_IRQ_STATE_DRIVE_ANALYSIS_1:
+      sum = 0;
+      for( i = 0; i < ADC_RAW_SAMPLE_CNT; i++ )
+        sum += (adc_raw_sample_array[i]>>4);
+      tim17_drive_current = sum / ADC_RAW_SAMPLE_CNT;
+      tim17_irq_state = TIM17_IRQ_STATE_DRIVE_ANALYSIS_2;
       break;
-    case IRQ_STATE_ANALYSIS_2:
-      tim17_irq_state = IRQ_STATE_ANALYSIS_3;
+    case TIM17_IRQ_STATE_DRIVE_ANALYSIS_2:
+      tim17_irq_state = TIM17_IRQ_STATE_DRIVE_ANALYSIS_3;
       break;
-    case IRQ_STATE_ANALYSIS_3:
-      tim17_irq_state = IRQ_STATE_SUPPLY;
+    case TIM17_IRQ_STATE_DRIVE_ANALYSIS_3:
+      tim17_irq_state = TIM17_IRQ_STATE_DRIVE_GET_SUPPLY;
       break;
-    case IRQ_STATE_SUPPLY:
-      adc_get_multiple_values(&refint, 1, 13);               // read bandgap value
+    case TIM17_IRQ_STATE_DRIVE_GET_SUPPLY:
+      adc_get_values_with_dma(&refint, 1, 13);               // read bandgap value
       update_adc_ticks_start = SysTick->VAL;
       update_adc_ticks_address = &adc_refint_ticks; 
-      tim17_irq_state = IRQ_STATE_VARPOT;
+      tim17_irq_state = TIM17_IRQ_STATE_DRIVE_GET_VARPOT;
       break;
-    case IRQ_STATE_VARPOT:
+    case TIM17_IRQ_STATE_DRIVE_GET_VARPOT:
       if ( varpot_skip_cnt == 0 )
       {
-        adc_get_multiple_values(&varpot, 1, 4);               // read var pot value
+        adc_get_values_with_dma(&varpot, 1, 4);               // read var pot value
         update_adc_ticks_start = SysTick->VAL;
         update_adc_ticks_address = &adc_varpot_ticks;
-        varpot_skip_cnt = 200;
+        varpot_skip_cnt = varpot_skip_total;
       }
       else
       {
         varpot_skip_cnt--;
       }
-      tim17_irq_state = IRQ_STATE_START_MOTOR_ADC;
+      tim17_irq_state = TIM17_IRQ_STATE_DRIVE_START_ADC;
+      tim17_handle_request();           // override and jump to a different sub state machine if required
       break;
     default:
-      tim17_irq_state = IRQ_STATE_START_MOTOR_ADC;
+      tim17_irq_state = TIM17_IRQ_STATE_IDLE;
       break;
   }
   
@@ -401,19 +612,23 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
   
 }
 
+/*
+  DMA1_Channel1_IRQHandler is only used for completion of ADC transfers
+*/
 uint16_t dma_irq_cnt = 0;
 void __attribute__ ((interrupt, used)) DMA1_Channel1_IRQHandler(void)
 {
-  
-  
   if ( update_adc_ticks_address != NULL )
   {
     *update_adc_ticks_address = getProcessorClockDelta(update_adc_ticks_start);
+    update_adc_ticks_address = NULL;
   }
   
   
   dma_irq_cnt++;
   DMA1->IFCR = DMA_IFCR_CTCIF1;       // clear the transfer complete IRQ
+  // TODO: DMA is only used by ADC, so we could stop the ADC after DMA completion
+  //ADC1->CR |= ADC_CR_ADSTP
 }
 
 /*===========================================*/
@@ -481,7 +696,10 @@ void drawDisplay(void)
   u8g2_DrawStr(&u8g2, 0,16, u8x8_u16toa(supply, 4));
   u8g2_DrawStr(&u8g2, 25,16, u8x8_u16toa(varpot, 4));
   u8g2_DrawStr(&u8g2, 50,16, u8x8_u16toa(TIM17->CCR1, 4));
-  u8g2_DrawStr(&u8g2, 75,16, u8x8_u16toa(motor_current, 4));
+  //u8g2_DrawStr(&u8g2, 75,16, u8x8_u16toa(motor_current, 4));
+
+  u8g2_DrawStr(&u8g2, 75,16, u8x8_u16toa(tim17_drive_current, 4));
+
 
   //u8g2_DrawStr(&u8g2, 0,24, "TIM17 irq cnt:");
   //u8g2_DrawStr(&u8g2, 70,24, u8x8_u16toa(tim17_irq_cnt, 5));
@@ -543,7 +761,6 @@ int main()
   SysTick->VAL = 0;
   SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
   
-  adc_init();
   //adc_enable_interrupt();
   initDisplay();
   hardware_init(4000);
