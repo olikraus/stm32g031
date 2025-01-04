@@ -242,6 +242,29 @@ uint16_t adc_get_value(uint8_t ch)
   //ADC1->CFGR1 &= ~ADC_CFGR1_ALIGN;		/* right alignment */
   //ADC1->CFGR1 &= ~ADC_CFGR1_RES;		/* 12 bit resolution */
   ADC1->CHSELR = 1<<ch; 				/* Select channel */
+  
+  ADC1->SMPR &= ~ADC_SMPR_SMP1;
+  ADC1->SMPR &= ~ADC_SMPR_SMP2;
+  /*
+    000: 1.5 ADC clock cycles
+    001: 3.5 ADC clock cycles
+    010: 7.5 ADC clock cycles
+    011: 12.5 ADC clock cycles
+    100: 19.5 ADC clock cycles
+    101: 39.5 ADC clock cycles
+    110: 79.5 ADC clock cycles
+    111: 160.5 ADC clock cycles
+  */
+  /* sampling time needs to be at least 12.5 ADC clock cycles for good results if the channels are changing */
+  /* minimal sampling time for both sampling values */  
+  /* 
+    12.5 clk sampling time + 12.5 conversion time for 12 bit --> 25 adc clocks @ 32MHz --> 0.78us --> 1.282.051 samples per second
+    
+    For multiple values, the max possible frequence for the array update would be:
+      32000000 / ( ADCTicks * 
+  */
+
+  
   //ADC1->SMPR |= ADC_SMPR_SMP1_0 | ADC_SMPR_SMP1_1 | ADC_SMPR_SMP1_2; /* Select a sampling mode of 111 (very slow)*/
   //ADC1->SMPR |= ADC_SMPR_SMP2_0 | ADC_SMPR_SMP2_1 | ADC_SMPR_SMP2_2; /* Select a sampling mode of 111 (very slow)*/
 
@@ -249,6 +272,9 @@ uint16_t adc_get_value(uint8_t ch)
   //ADC1->SMPR &= ~ADC_SMPR_SMP2;
   //ADC1->SMPR |= ADC_SMPR_SMP1_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
   //ADC1->SMPR |= ADC_SMPR_SMP2_2; /* Select a sampling mode of 100 (19.6 ADC cycles)*/
+
+  ADC1->SMPR |= ADC_SMPR_SMP1_0 | ADC_SMPR_SMP1_2;              // 39.5 ADC clock cycles --> 52 ticks 
+  ADC1->SMPR |= ADC_SMPR_SMP2_0 | ADC_SMPR_SMP2_2;
 
   /* DO CONVERSION */
 
@@ -283,6 +309,34 @@ void adc_get_multiple_values(uint16_t *adr, uint16_t cnt, uint8_t ch)
   //ADC1->CFGR1 |= ADC_CFGR1_EXTEN_0;     // HW trigger, rising edge
   //ADC1->CFGR1 |= ADC_CFGR1_EXTEN_1;     // HW trigger, falling edge
   //ADC1->CFGR1 &= ~ADC_CFGR1_EXTSEL;     // HW trigger input is TRG0 ("000"), which is TRGO2 from TIM1
+
+  ADC1->SMPR &= ~ADC_SMPR_SMP1;
+  ADC1->SMPR &= ~ADC_SMPR_SMP2;
+  /*
+    000: 1.5 ADC clock cycles
+    001: 3.5 ADC clock cycles
+    010: 7.5 ADC clock cycles
+    011: 12.5 ADC clock cycles
+    100: 19.5 ADC clock cycles
+    101: 39.5 ADC clock cycles
+    110: 79.5 ADC clock cycles
+    111: 160.5 ADC clock cycles
+  */
+  /* sampling time needs to be at least 12.5 ADC clock cycles for good results if the channels are changing */
+  /* minimal sampling time for both sampling values */  
+  /* 
+    12.5 clk sampling time + 12.5 conversion time for 12 bit --> 25 adc clocks @ 32MHz --> 0.78us --> 1.282.051 samples per second
+    
+    For multiple values, the max possible frequence for the array update would be:
+      32000000 / ( ADCTicks * cnt )
+      
+    Becasue ADC uses half system clock, the number of system ticks is
+      ADCTicks * cnt * 2
+      
+  */
+  ADC1->SMPR |= ADC_SMPR_SMP1_0 | ADC_SMPR_SMP1_2;              // 39.5 ADC clock cycles --> 52 ticks  --> 32000000 Hz / (52*128) --> 4807 Hz
+  ADC1->SMPR |= ADC_SMPR_SMP2_0 | ADC_SMPR_SMP2_2;
+
   
   ADC1->CHSELR = 1<<ch; 				/* Select channel */
 
@@ -309,7 +363,8 @@ void adc_get_multiple_values(uint16_t *adr, uint16_t cnt, uint8_t ch)
   DMAMUX1_Channel0->CCR = 0;
   DMAMUX1_Channel0->CCR =  5<<DMAMUX_CxCR_DMAREQ_ID_Pos;   /* 5=ADC */
 
-  DMA1_Channel1->CCR |= DMA_CCR_EN;                /* enable */
+  //DMA1_Channel1->CCR |= DMA_CCR_EN;                /* enable */
+  DMA1_Channel1->CCR |= DMA_CCR_EN | DMA_CCR_TCIE;                /* enable */
   
 
   ADC1->CR |= ADC_CR_ADSTART; /* start the ADC conversion */
@@ -356,7 +411,7 @@ void adc_get_channel_values(uint32_t channels, uint16_t *adr, int wait_for_resul
   {
     if ( c & 1 ) 
       cnt++;
-      c >>= 1;
+    c >>= 1;
   }
   
   /* stop any pending conversion */
@@ -424,7 +479,7 @@ void adc_get_channel_values(uint32_t channels, uint16_t *adr, int wait_for_resul
     while ((ADC1->ISR & ADC_ISR_EOS) == 0) /* wait end of sequence conversion */
     {
       if ( timeout == 0 )
-        return 0;
+        return;
       timeout--;
     }
   }

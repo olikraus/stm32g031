@@ -144,7 +144,8 @@ void hardware_init(uint16_t hz)
   GPIOB->OTYPER &= ~GPIO_OTYPER_OT9;	/* no Push/Pull */
   GPIOB->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED9;	/* low speed */
   GPIOB->PUPDR &= ~GPIO_PUPDR_PUPD9;	/* no pullup/pulldown */
-  GPIOB->BSRR = GPIO_BSRR_BR9;		/* atomic clr */
+  //GPIOB->BSRR = GPIO_BSRR_BR9;		/* atomic clr */
+  GPIOA->BSRR = GPIO_BSRR_BS9;		/* atomic set: default value for IN1 to H --> defaults to break mode */
   GPIOB->AFR[1] &= ~(15 << 4);
   GPIOB->AFR[1] |= 0 << 4;   // AF0: IR Interface IR_OUT
 
@@ -155,7 +156,8 @@ void hardware_init(uint16_t hz)
   GPIOA->OTYPER &= ~GPIO_OTYPER_OT13;	/* no Push/Pull */
   GPIOA->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED13;	/* low speed */
   GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD13;	/* no pullup/pulldown */
-  GPIOA->BSRR = GPIO_BSRR_BR13;		/* atomic clr */
+  //GPIOA->BSRR = GPIO_BSRR_BR13;		/* atomic clr */
+  GPIOA->BSRR = GPIO_BSRR_BS13;		/* atomic set: default value for IN2 to H --> defaults to break mode */
   GPIOA->AFR[1] &= ~(15 << 20);
   GPIOA->AFR[1] |= 1 << 20;   // AF1: IR Interface IR_OUT
 
@@ -261,6 +263,13 @@ void hardware_init(uint16_t hz)
 void tim17_set_duty(uint16_t duty, uint16_t is_backward)
 {
   TIM17->CCR1 = duty;
+  /* 
+    the idea is to switch between the TIM17 output and the GPIO output 
+    GPIO output is always 1 (assigned during init), so the below code will swap IN1 and IN2 connection.
+  
+    The TIM17 output will be either connected to IN1 or IN2 whole the constant 1 is applied to the other INx
+    As a result, the DRV8871 H-Bridge toggles between forward/backward and break mode  
+  */
   if ( is_backward )
   {
     GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
