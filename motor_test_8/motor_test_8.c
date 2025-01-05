@@ -121,19 +121,25 @@ volatile uint16_t tim17_req = TIM17_REQ_NONE;
 #define TIM17_IRQ_STATE_IDLE 0
 
 /* forward/backward drive */
-#define TIM17_IRQ_STATE_DRIVE_START_ADC 10
-#define TIM17_IRQ_STATE_DRIVE_WAIT_ADC 11
+#define TIM17_IRQ_STATE_DRIVE_START_ADC         10
+#define TIM17_IRQ_STATE_DRIVE_WAIT_ADC          11
 #define TIM17_IRQ_STATE_DRIVE_ANALYSIS_1         12
 #define TIM17_IRQ_STATE_DRIVE_ANALYSIS_2         13
 #define TIM17_IRQ_STATE_DRIVE_ANALYSIS_3         14
 #define TIM17_IRQ_STATE_DRIVE_GET_SUPPLY                15
 #define TIM17_IRQ_STATE_DRIVE_GET_VARPOT               16
 
+/* is in transition check */
+#define TIM17_IRQ_STATE_IS_TRANSITION_START_ADC         20
+#define TIM17_IRQ_STATE_IS_TRANSITION_WAIT_ADC         21
+
 
 volatile uint16_t tim17_irq_state = TIM17_IRQ_STATE_IDLE;       // state variable for tim17 irq handler
 volatile uint16_t tim17_irq_cnt = 0;                                    // just a counter how often tim17 irq handler is called
 
 volatile uint16_t tim17_drive_current = 0;                              // 
+
+volatile uint32_t tim17_is_transition = 0;                      // 0: not in transtion, 1: in transtion, 2: calculation ongoing
 
 /*===========================================*/
 /* Utility Procedures */
@@ -495,6 +501,24 @@ void tim17_set_duty(uint16_t duty, uint16_t is_backward)
   tim17_req = TIM17_REQ_DRIVE;
 }
 
+/*
+  start to figure out, whether the train is in transition from one section to the next section.
+  For this, we put the driver into break mode, this means tim is actually disabled, but will still generate IRQ requests
+
+  
+  The result is stored in the global variable 
+    tim17_is_transition
+  After calling this function, the value 2 will be assigned to "tim17_is_transition",
+  then, after some time, the value will be changed to 0 or 1 depending on the result.
+*/
+void tim17_start_is_transition()
+{
+  tim17_is_transition = 2;
+  tim17_motor_break();
+  tim17_req = TIM17_REQ_IS_TRANSITION;
+  
+}
+
 /*===========================================*/
 
 #define ADC_RAW_SAMPLE_CNT 128
@@ -515,6 +539,7 @@ void tim17_handle_request(void)
       tim17_irq_state = TIM17_IRQ_STATE_DRIVE_START_ADC;
       break;
     case TIM17_REQ_IS_TRANSITION:
+      tim17_irq_state = TIM17_IRQ_STATE_IS_TRANSITION_START_ADC;
       break;
     case TIM17_REQ_IS_OCCUPIED:
       break;
@@ -558,6 +583,11 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
       if ( DMA1_Channel1->CNDTR == 0 )
       {
         memcpy(adc_copy_sample_array, adc_raw_sample_array, ADC_RAW_SAMPLE_CNT*sizeof(uint16_t));
+        
+        sum = 0;
+        for( i = 0; i < ADC_RAW_SAMPLE_CNT; i++ )
+          sum += (adc_raw_sample_array[i]>>4);
+        tim17_drive_current = sum / ADC_RAW_SAMPLE_CNT;
         tim17_irq_state = TIM17_IRQ_STATE_DRIVE_ANALYSIS_1;
       }
       else
@@ -570,11 +600,7 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
       }
       break;
     case TIM17_IRQ_STATE_DRIVE_ANALYSIS_1:
-      sum = 0;
-      for( i = 0; i < ADC_RAW_SAMPLE_CNT; i++ )
-        sum += (adc_raw_sample_array[i]>>4);
-      tim17_drive_current = sum / ADC_RAW_SAMPLE_CNT;
-      tim17_irq_state = TIM17_IRQ_STATE_DRIVE_ANALYSIS_2;
+        tim17_irq_state = TIM17_IRQ_STATE_DRIVE_ANALYSIS_2;
       break;
     case TIM17_IRQ_STATE_DRIVE_ANALYSIS_2:
       tim17_irq_state = TIM17_IRQ_STATE_DRIVE_ANALYSIS_3;
@@ -602,6 +628,37 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
       }
       tim17_irq_state = TIM17_IRQ_STATE_DRIVE_START_ADC;
       tim17_handle_request();           // override and jump to a different sub state machine if required
+      break;
+      
+      
+    case TIM17_IRQ_STATE_IS_TRANSITION_START_ADC:
+      /* "is transition" monitoring is almost the same as the drive states from above */
+      adc_get_values_with_dma(adc_raw_sample_array, ADC_RAW_SAMPLE_CNT, 3);               // this will just start the sampling process
+      update_adc_ticks_start = SysTick->VAL;
+      update_adc_ticks_address = &adc_motor_ticks; 
+      dma_busy_cnt = 0;
+      tim17_irq_state = TIM17_IRQ_STATE_IS_TRANSITION_WAIT_ADC;
+      break;
+    case TIM17_IRQ_STATE_IS_TRANSITION_WAIT_ADC:
+      if ( DMA1_Channel1->CNDTR == 0 )
+      {
+        memcpy(adc_copy_sample_array, adc_raw_sample_array, ADC_RAW_SAMPLE_CNT*sizeof(uint16_t));
+        sum = 0;
+        for( i = 0; i < ADC_RAW_SAMPLE_CNT; i++ )
+          sum += (adc_raw_sample_array[i]>>4);
+        
+        /* TODO: assign the tim17_is_transition value, like so: tim17_is_transition = sum >= 2 : 1 : 0  */
+        tim17_irq_state = TIM17_IRQ_STATE_IDLE;
+      }
+      else
+      {
+        dma_busy_cnt++;
+        if ( dma_busy_cnt > 16 )
+        {
+          tim17_is_transition = 0;      // error state, report as no transition
+          tim17_irq_state = TIM17_IRQ_STATE_IDLE;
+        }
+      }
       break;
     default:
       tim17_irq_state = TIM17_IRQ_STATE_IDLE;
@@ -676,7 +733,7 @@ void drawDisplay(void)
 {
   uint16_t v;
   uint16_t i;
-  uint16_t motor_current = adc_get_value(3); // PA3, IN3 
+  //uint16_t motor_current = adc_get_value(3); // PA3, IN3 
   //varpot = adc_get_value(4); // PA4, IN4 
   //refint = adc_get_value(13);  // bandgap reference 1212mV
   uint16_t supply = (4095UL*1212UL)/refint;
