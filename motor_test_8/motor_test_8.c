@@ -123,15 +123,17 @@ volatile uint16_t tim17_req = TIM17_REQ_NONE;
 /* forward/backward drive */
 #define TIM17_IRQ_STATE_DRIVE_START_ADC         10
 #define TIM17_IRQ_STATE_DRIVE_WAIT_ADC          11
-#define TIM17_IRQ_STATE_DRIVE_ANALYSIS_1         12
-#define TIM17_IRQ_STATE_DRIVE_ANALYSIS_2         13
-#define TIM17_IRQ_STATE_DRIVE_ANALYSIS_3         14
-#define TIM17_IRQ_STATE_DRIVE_GET_SUPPLY                15
-#define TIM17_IRQ_STATE_DRIVE_GET_VARPOT               16
+#define TIM17_IRQ_STATE_DRIVE_GET_SUPPLY                12
+#define TIM17_IRQ_STATE_DRIVE_GET_VARPOT               13
 
 /* is in transition check */
 #define TIM17_IRQ_STATE_IS_TRANSITION_START_ADC         20
 #define TIM17_IRQ_STATE_IS_TRANSITION_WAIT_ADC         21
+
+/* is occupied / is dc motor connected check */
+#define TIM17_IRQ_STATE_IS_OCCUPIED_START_ADC         30
+#define TIM17_IRQ_STATE_IS_OCCUPIED_WAIT_ADC         31
+#define TIM17_IRQ_STATE_IS_OCCUPIED_WAIT2_ADC         32
 
 
 volatile uint16_t tim17_irq_state = TIM17_IRQ_STATE_IDLE;       // state variable for tim17 irq handler
@@ -139,7 +141,10 @@ volatile uint16_t tim17_irq_cnt = 0;                                    // just 
 
 volatile uint16_t tim17_drive_current = 0;                              // 
 
-volatile uint32_t tim17_is_transition = 0;                      // 0: not in transtion, 1: in transtion, 2: calculation ongoing
+volatile uint16_t tim17_is_transition = 0;                      // 0: not in transtion, 1: in transtion, 2: calculation ongoing
+
+
+volatile uint16_t tim17_is_occupied = 0;                      // 0: motor not connected, 1: connected, 2: calculation ongoing
 
 /*===========================================*/
 /* Utility Procedures */
@@ -437,6 +442,7 @@ The GPIO Mode register has two bits:
 
 */
 
+/* disconnect both dc motor lines --> Hi-Z: coast */
 void tim17_motor_coast(void)
 {
     GPIOB->MODER &= ~GPIO_MODER_MODE9;	/* clear mode */
@@ -448,18 +454,19 @@ void tim17_motor_coast(void)
     GPIOA->BSRR = GPIO_BSRR_BR13;                    /* clear bit */
 }
 
+/* connect both dc motor lines to GND: break */
 void tim17_motor_break(void)
 {
     GPIOB->MODER &= ~GPIO_MODER_MODE9;	/* clear mode */
     GPIOB->MODER |= GPIO_MODER_MODE9_0;	/* output mode */    
-    GPIOB->BSRR = GPIO_BSRR_BS9;                      /* clear bit */
+    GPIOB->BSRR = GPIO_BSRR_BS9;                      /* set bit */
   
     GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
     GPIOA->MODER |= GPIO_MODER_MODE13_0;	/* output mode */
-    GPIOA->BSRR = GPIO_BSRR_BS13;                    /* clear bit */
+    GPIOA->BSRR = GPIO_BSRR_BS13;                    /* set bit */
 }
 
-void tim17_motor_backward(void)
+void tim17_motor_pwm_backward(void)
 {
     GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
     GPIOA->MODER |= GPIO_MODER_MODE13_1;	/* Alternate Function mode */
@@ -469,7 +476,7 @@ void tim17_motor_backward(void)
     GPIOB->BSRR = GPIO_BSRR_BS9;
 }
 
-void tim17_motor_forward(void)
+void tim17_motor_pwm_forward(void)
 {
     GPIOA->MODER &= ~GPIO_MODER_MODE13;	/* clear mode */
     GPIOA->MODER |= GPIO_MODER_MODE13_0;	/* output mode */
@@ -492,13 +499,25 @@ void tim17_set_duty(uint16_t duty, uint16_t is_backward)
   */
   if ( is_backward )
   {
-    tim17_motor_backward();
+    tim17_motor_pwm_backward();
   }
   else
   {
-    tim17_motor_forward();
+    tim17_motor_pwm_forward();
   }
   tim17_req = TIM17_REQ_DRIVE;
+}
+
+void tim17_set_duty_by_varpot(void)
+{
+    uint16_t adc = varpot;
+    uint16_t inv = adc >= (1<<11)?1:0;
+    if ( inv )
+      adc = adc - (1<<11);
+    else
+      adc = (1<<11) - 1 - adc;
+      
+    tim17_set_duty(adc, inv);
 }
 
 /*
@@ -516,8 +535,66 @@ void tim17_start_is_transition()
   tim17_is_transition = 2;
   tim17_motor_break();
   tim17_req = TIM17_REQ_IS_TRANSITION;
-  
 }
+
+void tim17_start_is_occupied()
+{
+  uint16_t duty = 600;           // use some small value, TODO: Create a global config variable for this
+  tim17_is_occupied = 2;
+  TIM17->CCR1 = ((1<<TIM17_BIT_CNT)-1) - duty; 
+  tim17_motor_pwm_forward();            // forward or backward doesn't matter for the connection test
+  tim17_req = TIM17_REQ_IS_OCCUPIED;
+}
+
+
+/*===========================================*/
+#define MOTOR_DISCONNECTED 0
+#define MOTOR_IS_TRANSITION_WAIT 1
+#define MOTOR_IS_OCCUPIED_WAIT 2
+#define MOTOR_CONNECTED 3
+volatile uint16_t motor_state = MOTOR_DISCONNECTED;
+
+void motor_state_next(void)
+{
+  switch(motor_state)
+  {
+    case MOTOR_DISCONNECTED:
+      tim17_start_is_transition();
+      motor_state = MOTOR_IS_TRANSITION_WAIT;
+      break;
+    case MOTOR_IS_TRANSITION_WAIT:
+      if ( tim17_is_transition == 0 )           // not in transition, then start connected test
+      {
+        tim17_start_is_occupied();
+        motor_state = MOTOR_IS_OCCUPIED_WAIT;
+      }
+      else  if ( tim17_is_transition == 1 )  // in transition... restart the test... wait until transition is done
+      {
+        tim17_start_is_transition();
+      }
+      break;
+    case MOTOR_IS_OCCUPIED_WAIT:
+      if ( tim17_is_occupied == 0 )           // not connected..
+      {
+        motor_state = MOTOR_DISCONNECTED;
+      }
+      else if ( tim17_is_occupied == 1 )
+      { 
+        motor_state = MOTOR_CONNECTED;
+        tim17_set_duty_by_varpot();
+      }
+      break;
+    case MOTOR_CONNECTED:
+      tim17_set_duty_by_varpot();
+      if ( tim17_drive_current < 2 )  // TODO: Add a global threshold value
+      {
+        motor_state = MOTOR_DISCONNECTED;
+        tim17_motor_coast();
+      }
+      break;
+  }
+}
+
 
 /*===========================================*/
 
@@ -542,8 +619,10 @@ void tim17_handle_request(void)
       tim17_irq_state = TIM17_IRQ_STATE_IS_TRANSITION_START_ADC;
       break;
     case TIM17_REQ_IS_OCCUPIED:
+      tim17_irq_state = TIM17_IRQ_STATE_IS_OCCUPIED_START_ADC;
       break;
   }
+  tim17_req = TIM17_REQ_NONE;
 }
 
 
@@ -557,6 +636,9 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
 
   switch( tim17_irq_state )
   {
+    
+    /* === IDLE === */
+    
     case TIM17_IRQ_STATE_IDLE:
         if ( varpot_skip_cnt == 0 )
         {
@@ -572,6 +654,9 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
         /* stay in IDLE state */
         tim17_handle_request();           // override and jump to a different sub state machine if required
         break;
+        
+    /* === DRIVE === */
+        
     case TIM17_IRQ_STATE_DRIVE_START_ADC:
       adc_get_values_with_dma(adc_raw_sample_array, ADC_RAW_SAMPLE_CNT, 3);               // this will just start the sampling process
       update_adc_ticks_start = SysTick->VAL;
@@ -587,26 +672,20 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
         sum = 0;
         for( i = 0; i < ADC_RAW_SAMPLE_CNT; i++ )
           sum += (adc_raw_sample_array[i]>>4);
-        tim17_drive_current = sum / ADC_RAW_SAMPLE_CNT;
-        tim17_irq_state = TIM17_IRQ_STATE_DRIVE_ANALYSIS_1;
+        tim17_drive_current = sum;
+        if ( sum == 0 )
+          tim17_irq_state = TIM17_IRQ_STATE_IDLE;
+        else 
+          tim17_irq_state = TIM17_IRQ_STATE_DRIVE_GET_SUPPLY;
       }
       else
       {
         dma_busy_cnt++;
         if ( dma_busy_cnt > 16 )
         {
-          tim17_irq_state = TIM17_IRQ_STATE_DRIVE_GET_SUPPLY;
+          tim17_irq_state = TIM17_IRQ_STATE_IDLE;
         }
       }
-      break;
-    case TIM17_IRQ_STATE_DRIVE_ANALYSIS_1:
-        tim17_irq_state = TIM17_IRQ_STATE_DRIVE_ANALYSIS_2;
-      break;
-    case TIM17_IRQ_STATE_DRIVE_ANALYSIS_2:
-      tim17_irq_state = TIM17_IRQ_STATE_DRIVE_ANALYSIS_3;
-      break;
-    case TIM17_IRQ_STATE_DRIVE_ANALYSIS_3:
-      tim17_irq_state = TIM17_IRQ_STATE_DRIVE_GET_SUPPLY;
       break;
     case TIM17_IRQ_STATE_DRIVE_GET_SUPPLY:
       adc_get_values_with_dma(&refint, 1, 13);               // read bandgap value
@@ -629,7 +708,8 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
       tim17_irq_state = TIM17_IRQ_STATE_DRIVE_START_ADC;
       tim17_handle_request();           // override and jump to a different sub state machine if required
       break;
-      
+
+    /* === IS TRANSITION === */
       
     case TIM17_IRQ_STATE_IS_TRANSITION_START_ADC:
       /* "is transition" monitoring is almost the same as the drive states from above */
@@ -642,12 +722,16 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
     case TIM17_IRQ_STATE_IS_TRANSITION_WAIT_ADC:
       if ( DMA1_Channel1->CNDTR == 0 )
       {
-        memcpy(adc_copy_sample_array, adc_raw_sample_array, ADC_RAW_SAMPLE_CNT*sizeof(uint16_t));
         sum = 0;
         for( i = 0; i < ADC_RAW_SAMPLE_CNT; i++ )
           sum += (adc_raw_sample_array[i]>>4);
+        tim17_drive_current = sum;
+
+        if ( sum > 0 )
+          memcpy(adc_copy_sample_array, adc_raw_sample_array, ADC_RAW_SAMPLE_CNT*sizeof(uint16_t));
         
-        /* TODO: assign the tim17_is_transition value, like so: tim17_is_transition = sum >= 2 : 1 : 0  */
+        tim17_is_transition = (sum >= 2) ? 1 : 0;               // TODO: Create a global threshold value, warning: "sum" is NOT divided by ADC_RAW_SAMPLE_CNT
+        tim17_motor_coast();            // disconnect DC Motor
         tim17_irq_state = TIM17_IRQ_STATE_IDLE;
       }
       else
@@ -656,6 +740,52 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
         if ( dma_busy_cnt > 16 )
         {
           tim17_is_transition = 0;      // error state, report as no transition
+          tim17_irq_state = TIM17_IRQ_STATE_IDLE;
+        }
+      }
+      break;
+
+    /* === IS OCCUPIED / IS DC MOTOR CONNECTED === */
+      
+    case TIM17_IRQ_STATE_IS_OCCUPIED_START_ADC:
+      /* "is transition" monitoring is almost the same as the drive states from above */
+      tim17_irq_state = TIM17_IRQ_STATE_IS_OCCUPIED_WAIT_ADC;
+      dma_busy_cnt = 3; // used as delay counter
+      break;
+    case TIM17_IRQ_STATE_IS_OCCUPIED_WAIT_ADC:
+      if ( dma_busy_cnt > 0 )
+      {
+        dma_busy_cnt--;
+        break;
+      }
+      adc_get_values_with_dma(adc_raw_sample_array, ADC_RAW_SAMPLE_CNT, 3);               // this will just start the sampling process
+      update_adc_ticks_start = SysTick->VAL;
+      update_adc_ticks_address = &adc_motor_ticks; 
+      dma_busy_cnt = 0;
+      tim17_irq_state = TIM17_IRQ_STATE_IS_OCCUPIED_WAIT2_ADC;
+      break;
+    case TIM17_IRQ_STATE_IS_OCCUPIED_WAIT2_ADC:
+      if ( DMA1_Channel1->CNDTR == 0 )
+      {
+        sum = 0;
+        for( i = 0; i < ADC_RAW_SAMPLE_CNT; i++ )
+          sum += (adc_raw_sample_array[i]>>4);
+        tim17_drive_current = sum;
+
+        if ( sum > 0 )
+          memcpy(adc_copy_sample_array, adc_raw_sample_array, ADC_RAW_SAMPLE_CNT*sizeof(uint16_t));
+        
+        tim17_is_occupied = (sum >= 2) ? 1 : 0;         // TODO: Create a global threshold value
+        //tim17_is_occupied = 1;
+        tim17_motor_coast();            // disconnect DC Motor
+        tim17_irq_state = TIM17_IRQ_STATE_IDLE;
+      }
+      else
+      {
+        dma_busy_cnt++;
+        if ( dma_busy_cnt > 16 )
+        {
+          tim17_is_occupied = 1;      // error state, report as no transition
           tim17_irq_state = TIM17_IRQ_STATE_IDLE;
         }
       }
@@ -733,11 +863,24 @@ void drawDisplay(void)
 {
   uint16_t v;
   uint16_t i;
+  char *motor_state_str = "";
   //uint16_t motor_current = adc_get_value(3); // PA3, IN3 
   //varpot = adc_get_value(4); // PA4, IN4 
   //refint = adc_get_value(13);  // bandgap reference 1212mV
   uint16_t supply = (4095UL*1212UL)/refint;
 
+  if ( motor_state == MOTOR_DISCONNECTED )
+    motor_state_str = "D";
+  else if ( motor_state == MOTOR_CONNECTED )
+    motor_state_str = "C";
+  else if ( motor_state == MOTOR_IS_TRANSITION_WAIT )
+    motor_state_str = "T";
+  else if ( motor_state == MOTOR_IS_OCCUPIED_WAIT )
+    motor_state_str = "O";
+  else
+    motor_state_str = "-";
+
+  
 
   u8g2_SetFont(&u8g2, u8g2_font_5x7_tr);
   u8g2_ClearBuffer(&u8g2);
@@ -755,7 +898,7 @@ void drawDisplay(void)
   u8g2_DrawStr(&u8g2, 50,16, u8x8_u16toa(TIM17->CCR1, 4));
   //u8g2_DrawStr(&u8g2, 75,16, u8x8_u16toa(motor_current, 4));
 
-  u8g2_DrawStr(&u8g2, 75,16, u8x8_u16toa(tim17_drive_current, 4));
+  u8g2_DrawStr(&u8g2, 75,16, u8x8_u16toa(tim17_drive_current, 5));
 
 
   //u8g2_DrawStr(&u8g2, 0,24, "TIM17 irq cnt:");
@@ -771,8 +914,6 @@ void drawDisplay(void)
   u8g2_DrawStr(&u8g2, 70,24, u8x8_u16toa((uint16_t)adc_motor_ticks, 5));
   u8g2_DrawStr(&u8g2, 100,24, u8x8_u16toa((uint16_t)tim17_peroidic_ticks, 5));
 
-
-
   for( i = 0; i <  ADC_RAW_SAMPLE_CNT; i++ )
   {
     v = adc_copy_sample_array[i];
@@ -781,6 +922,9 @@ void drawDisplay(void)
       v = 40;
     u8g2_DrawPixel( &u8g2, i, 63 - v );
   }
+
+  u8g2_SetFont(&u8g2, u8g2_font_10x20_tr);
+  u8g2_DrawStr(&u8g2, 116,15, motor_state_str);
   
   u8g2_SendBuffer(&u8g2);
 }
@@ -830,7 +974,11 @@ int main()
 
     drawDisplay();
     
-    uint16_t adc = adc_get_value(4);  // 12 Bit
+    motor_state_next();
+    //tim17_set_duty_by_varpot();
+    
+    /*
+    uint16_t adc = varpot;
     uint16_t inv = adc >= (1<<11)?1:0;
     if ( inv )
       adc = adc - (1<<11);
@@ -838,6 +986,7 @@ int main()
       adc = (1<<11) - 1 - adc;
       
     tim17_set_duty(adc, inv);
+    */
   }
 }
 

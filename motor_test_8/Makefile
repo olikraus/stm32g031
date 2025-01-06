@@ -113,7 +113,7 @@ GC:=-Wl,--gc-sections  -Wl,--undefined=__isr_vector
 MAP:=-Wl,-Map=$(MAPNAME)
 LFLAGS:=$(COMMON_FLAGS) $(GC) $(MAP)
 #LDLIBS:=--specs=nosys.specs -lc -lc -lnosys -L$(LDSCRIPTDIR) -T $(LDSCRIPT)
-LDLIBS:=--specs=nosys.specs -L$(LDSCRIPTDIR) -T $(LDSCRIPT)
+LDLIBS:=--specs=nano.specs -L$(LDSCRIPTDIR) -T $(LDSCRIPT)
 # the ubuntu version of arm-none-eabi-ar seems to be compiled in deterministic mode which will force timestamp to zero, use undeterministic mode instead (U-modifier)
 ARFLAGS=rvU
 

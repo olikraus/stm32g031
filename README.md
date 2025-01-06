@@ -19,3 +19,8 @@ DIY projects with the STM32G031 and STM32G030 microcontroller
  * TSSOP20
  * F8: 20 pins with 64KB Flash
  * Examples with `_8` postfix: 64KB Flash STM32G031x8
+ 
+## Toolchain Notes
+ * Use `LDLIBS:=--specs=nano.specs` instead of `nosys.specs`. The later will generate wanings and is not required
+ * Apply `ARFLAGS=rvU` so that the archive includes proper timestamp (otherwise everything will be always rebuild)
+ 
