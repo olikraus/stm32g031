@@ -750,14 +750,8 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
     case TIM17_IRQ_STATE_IS_OCCUPIED_START_ADC:
       /* "is transition" monitoring is almost the same as the drive states from above */
       tim17_irq_state = TIM17_IRQ_STATE_IS_OCCUPIED_WAIT_ADC;
-      dma_busy_cnt = 3; // used as delay counter
-      break;
+      //break;          // fall through due to speed up
     case TIM17_IRQ_STATE_IS_OCCUPIED_WAIT_ADC:
-      if ( dma_busy_cnt > 0 )
-      {
-        dma_busy_cnt--;
-        break;
-      }
       adc_get_values_with_dma(adc_raw_sample_array, ADC_RAW_SAMPLE_CNT, 3);               // this will just start the sampling process
       update_adc_ticks_start = SysTick->VAL;
       update_adc_ticks_address = &adc_motor_ticks; 
@@ -774,7 +768,7 @@ void __attribute__ ((interrupt, used)) TIM17_IRQHandler(void)
 
         if ( sum > 0 )
           memcpy(adc_copy_sample_array, adc_raw_sample_array, ADC_RAW_SAMPLE_CNT*sizeof(uint16_t));
-        
+          
         tim17_is_occupied = (sum >= 2) ? 1 : 0;         // TODO: Create a global threshold value
         //tim17_is_occupied = 1;
         tim17_motor_coast();            // disconnect DC Motor
@@ -846,12 +840,7 @@ volatile unsigned long SysTickCount = 0;
 void __attribute__ ((interrupt, used)) SysTick_Handler(void)
 {
   SysTickCount++;  
-  
-  // PA3 is the current senser of the dc motor
-  //if ( SysTickCount & 1 )
-  //  GPIOA->BSRR = GPIO_BSRR_BS3;		/* atomic set PA3 */
-  //else
-  //  GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
+  motor_state_next();
 }
 
 
@@ -956,8 +945,9 @@ int main()
   //GPIOA->OSPEEDR &= ~GPIO_OSPEEDR_OSPEED3;	/* low speed for PA3 */
   //GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD3;	/* no pullup/pulldown for PA3 */
   //GPIOA->BSRR = GPIO_BSRR_BR3;		/* atomic clr PA3 */
-  
-  SysTick->LOAD = 16000*500 - 1;        // Blink with 4 Hz 
+
+  //SysTick->LOAD = 16000*500 - 1;        // 8Hz calls, Blink with 4 Hz 
+  SysTick->LOAD = 640000;        // 100Hz calls to the systick handler
   NVIC_SetPriority( SysTick_IRQn, 3 );  // 3: lowest priority
   SysTick->VAL = 0;
   SysTick->CTRL = 7;   /* enable, generate interrupt (SysTick_Handler), do not divide by 2 */
@@ -968,25 +958,10 @@ int main()
   
   NVIC_SetPriority(DMA1_Channel1_IRQn, 1);
   NVIC_EnableIRQ(DMA1_Channel1_IRQn);
-  
+
   for(;;)
   {
-
     drawDisplay();
-    
-    motor_state_next();
-    //tim17_set_duty_by_varpot();
-    
-    /*
-    uint16_t adc = varpot;
-    uint16_t inv = adc >= (1<<11)?1:0;
-    if ( inv )
-      adc = adc - (1<<11);
-    else
-      adc = (1<<11) - 1 - adc;
-      
-    tim17_set_duty(adc, inv);
-    */
   }
 }
 
